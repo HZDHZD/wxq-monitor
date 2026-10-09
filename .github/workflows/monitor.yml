@@ -1,0 +1,40 @@
+name: 万象棋公告监控
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # 每 10 分钟一次（UTC）
+  workflow_dispatch:          # 允许手动触发一次
+
+permissions:
+  contents: write             # 需要把更新后的账本 commit 回仓库
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: pip install -r cloud/requirements.txt
+
+      - name: 运行监控
+        working-directory: cloud
+        env:
+          FROM_ADDR: ${{ secrets.FROM_ADDR }}
+          AUTH_CODE: ${{ secrets.AUTH_CODE }}
+          TO_ADDRS: ${{ secrets.TO_ADDRS }}
+          PING_URL: ${{ secrets.PING_URL }}
+        run: python monitor_cloud.py
+
+      - name: 回写账本与心跳
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add cloud/seen_announcements.json cloud/last_run.txt
+          git diff --cached --quiet || git commit -m "chore: update announcement ledger"
+          git push
