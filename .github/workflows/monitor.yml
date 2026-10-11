@@ -1,8 +1,10 @@
 name: 万象棋公告监控
 
 on:
+  repository_dispatch:        # 主通道：Cloudflare Worker 每 5 分钟用 API 唤醒（不受 schedule 限流影响）
+    types: [wake-monitor]
   schedule:
-    - cron: "5,15,25,35,45,55 * * * *"   # 每 10 分钟一次（UTC 第 5/15/25/35/45/55 分），与 Cloudflare 版（第 0/10/20…分）错开，合并后约每 5 分钟检查一次。用显式逗号列表，避开 GitHub 对"范围+步长"写法支持不稳的问题
+    - cron: "5,15,25,35,45,55 * * * *"   # 兜底通道：GitHub 自己的定时（新号被限流，实际频率以 dispatch 为准）
   workflow_dispatch:          # 允许手动触发一次
 
 permissions:
