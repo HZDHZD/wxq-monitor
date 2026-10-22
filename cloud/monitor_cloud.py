@@ -39,6 +39,8 @@ API_BIZ = "389"
 CHANID_ANNOUNCEMENT = "7061"
 
 DETAIL_URL = "https://wxq.qq.com/cp/a20260707sfgw/newsdetail.html?newsid={newsid}&tab={chanid}"
+# 出图页（GitHub Pages）：带上 newsid 打开就自动填好第一章
+DRAW_URL = "https://hzdhzd.github.io/wxq-monitor/auto.html?newsid={newsid}"
 
 # 标题过滤关键词（与本地版一致）
 TITLE_KEYWORDS = ("更新", "开服", "关服", "体验服", "正式服")
@@ -84,6 +86,7 @@ def fetch_channel(chanid: str, limit: int = 30) -> list:
             "time": it.get("sIdxTime") or it.get("sCreated") or "",
             "version": (it.get("sGameVersion") or "").strip(),
             "url": DETAIL_URL.format(newsid=newsid, chanid=chanid),
+            "draw": DRAW_URL.format(newsid=newsid),
         })
     return result
 
@@ -137,7 +140,11 @@ def build_email_html(new_items: list) -> str:
             f'<a href="{it["url"]}" style="font-size:16px;color:#1a73e8;'
             f'text-decoration:none;font-weight:bold">{it["title"]}{ver}</a>'
             f'<div style="color:#999;font-size:12px;margin-top:4px">'
-            f'发布时间：{it["time"]}</div></div>')
+            f'发布时间：{it["time"]}</div>'
+            f'<div style="margin-top:8px">'
+            f'<a href="{it["draw"]}" style="display:inline-block;padding:6px 14px;'
+            f'background:#1a73e8;color:#fff;border-radius:6px;font-size:13px;'
+            f'text-decoration:none">打开出图页（自动填好第一章）</a></div></div>')
     return ('<div style="font-family:Microsoft YaHei,Arial,sans-serif;'
             'max-width:640px;margin:0 auto;padding:16px">'
             '<h2 style="color:#333">王者万象棋 新公告提醒</h2>'
