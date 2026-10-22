@@ -10,6 +10,11 @@ on:
 permissions:
   contents: write             # 需要把更新后的账本 commit 回仓库
 
+# 定时与延迟唤醒有可能在同一分钟撞上，排队执行避免两边同时回写账本
+concurrency:
+  group: wxq-monitor
+  cancel-in-progress: false
+
 jobs:
   monitor:
     runs-on: ubuntu-latest
@@ -49,4 +54,10 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add cloud/seen_announcements.json cloud/last_run.txt
           git diff --cached --quiet || git commit -m "chore: update announcement ledger"
-          git push
+          # 另一轮可能刚推过账本，先同步再推；仍被拒就重试
+          for i in 1 2 3; do
+            git pull --rebase --autostash origin main || true
+            if git push; then exit 0; fi
+            sleep 5
+          done
+          exit 1
