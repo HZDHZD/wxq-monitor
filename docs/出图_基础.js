@@ -1,4 +1,5 @@
 /* 本文件由 出图.html 拆出，按函数名定位（行号会漂移） */
+/* 线上版本由 同步到线上.bat 从本地复制到仓库 docs 并推送 */
 /* =======================  基础工具  ======================= */
 const FONT = '"PingFang SC","Microsoft YaHei","Hiragino Sans GB","Source Han Sans SC",sans-serif';
 
