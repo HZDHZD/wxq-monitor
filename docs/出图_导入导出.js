@@ -1,47 +1,18 @@
 /* 本文件由 出图.html 拆出，按函数名定位（行号会漂移） */
 
-/* 两块共用：解析、套用元信息、刷新编辑器。
-   which=1 只换第一章，which=2 只换后续章节，重复导入不会叠加 */
-function importInto(which, tipEl) {
-  const box = document.getElementById(which === 1 ? 'importBox1' : 'importBox2');
+/* 只导一次：整篇 JSON（第一章 + 局外各章）。重复导入整体替换，不叠加 */
+function importInto(tipEl) {
+  const box = document.getElementById('importBox1');
   const tip = document.getElementById(tipEl);
   const meta = extractMeta(box.value);
-  const secs = parseDigest(meta.text);
-  /* 第二块是第二～五章：正文里出现的日期（「10月11日22:00正式解锁」）不是公告日期，
-     只有显式 @@META 或 JSON 才采纳，否则沿用第一章带过来的元信息 */
-  const isJson = /^\s*[\[{]/.test(box.value.trim());
-  const hasMeta = isJson || /(?:^|\n)\s*(?:【元信息】)?\s*[@＠]{2}\s*META/i.test(box.value);
-  if (which === 2 && !hasMeta) { meta.server = ''; meta.date = ''; }
+  const parsed = parseJSONSections(meta.text);
+  const secs = parsed ? normalizeSections(parsed) : [];
   if (!secs.length) {
     tip.className = 'err';
-    tip.textContent = which === 1
-      ? '没识别到内容。这里要粘「公告提炼 → 复制第一章 JSON」的原样 JSON。'
-      : '没识别到内容。可以直接粘官方原文，也可以粘带符号的文本：章节「二、…」/ 分组「【…】」/ 三级「◆ …」/ 条目「● …」/ 无标题条目「○ …」。';
+    tip.textContent = '没识别到内容。这里要粘「公告提炼 → 复制整篇 JSON」的原样 JSON。';
     return;
   }
-  /* 当前还是示例数据时直接清空，不把示例混进来 */
-  const isSample = JSON.stringify(state.sections) === JSON.stringify(SAMPLE.sections);
-  const current = isSample ? [] : state.sections;
-  let dropped = 0;
-  let imported = secs;
-
-  if (which === 1) {
-    /* 第一章整体替换：粘进来的内容原样排在最前，后面的章节保留。
-       粘进来不止一章说明是整篇 JSON，旧的后续章节一并换掉，避免局外重复 */
-    const keep = secs.length > 1 ? [] : current.slice(1);
-    state.sections = secs.concat(keep);
-  } else {
-    /* 后续章节整体替换：第一位永远是第一章，内容保留；其余换成本次粘进来的。
-       粘进来的第一条如果是第一章（「一、…」或无序号、且点名核心玩法），说明是整篇公告
-       连第一章一起粘了，丢掉这一段，避免出现两个第一章；名字带「二、」这类序号的
-       局外章节照常保留（章节名里出现「核心玩法」不算第一章） */
-    const headIsChapterOne = isCoreSec(secs[0])
-      && !/^\s*(?:二|三|四|五|六|七|八|九|十|\d+)\s*[、.．:：]/.test(String(secs[0].name || ''));
-    dropped = headIsChapterOne ? 1 : 0;
-    imported = secs.slice(dropped);
-    const core = current.length ? current.slice(0, 1) : [{ name: '一、核心玩法更新', groups: [] }];
-    state.sections = core.concat(imported);
-  }
+  state.sections = secs;
 
   if (meta.server) { state.server = meta.server; setServerUI(); }
   if (meta.date) { state.date = meta.date; setDateUI(); }
@@ -49,19 +20,15 @@ function importInto(which, tipEl) {
   pageIdx = 0;
   buildEditor(); render();
 
-  const g = imported.reduce((a, s) => a + s.groups.length, 0);
-  const n = imported.reduce((a, s) => a + s.groups.reduce((b, x) => b + x.items.length, 0), 0);
+  const g = secs.reduce((a, s) => a + s.groups.length, 0);
+  const n = secs.reduce((a, s) => a + s.groups.reduce((b, x) => b + x.items.length, 0), 0);
   const recognized = [meta.server && `服务器 ${meta.server}`, meta.date && `日期 ${meta.date}`].filter(Boolean).join(' · ');
   tip.className = '';
-  tip.textContent = (which === 1
-    ? `已导入第一章：${imported.length} 个章节 / ${g} 个分组 / ${n} 个条目`
-    : `已导入后续 ${imported.length} 章 / ${g} 个分组 / ${n} 个条目（第一章保留）`)
-    + (dropped ? `；已忽略随文本带进来的第一章` : '')
+  tip.textContent = `已导入整篇：${secs.length} 个章节 / ${g} 个分组 / ${n} 个条目`
     + (recognized ? `；已识别 ${recognized}` : '');
 }
 
-document.getElementById('btnImport1').addEventListener('click', () => importInto(1, 'importTip1'));
-document.getElementById('btnImport2').addEventListener('click', () => importInto(2, 'importTip2'));
+document.getElementById('btnImport1').addEventListener('click', () => importInto('importTip1'));
 
 document.getElementById('btnSample').addEventListener('click', () => {
   state.date = SAMPLE.date; state.server = SAMPLE.server; state.foot = SAMPLE.foot;
@@ -357,9 +324,9 @@ async function autoFill(getData, statusText) {
       frame.onerror = () => { clearTimeout(timer); bad(new Error('提炼页加载失败')); };
     });
     const got = await getData(frame.contentWindow);
-    if (!got.data || !got.data.sections.length) throw new Error('这篇公告里没有第一章内容');
+    if (!got.data || !got.data.sections.length) throw new Error('这篇公告没有解析到内容');
     document.getElementById('importBox1').value = JSON.stringify(got.data, null, 2);
-    importInto(1, 'importTip1');
+    importInto('importTip1');
     if (got.title) tip.textContent = '《' + got.title + '》　' + tip.textContent;
   } catch (e) {
     tip.className = 'err';
@@ -378,7 +345,7 @@ async function autoFill(getData, statusText) {
   }
   const id = new URLSearchParams(location.search).get('newsid');
   if (id) {
-    autoFill(async w => ({ data: await w.__wxq.autoFirstChapter(id), title: '' }), '正在抓取公告并解析第一章…');
+    autoFill(async w => ({ data: await w.__wxq.autoNotice(id), title: '' }), '正在抓取公告并解析整篇…');
   } else {
     autoFill(async w => {
       const r = await w.__wxq.autoLatest();

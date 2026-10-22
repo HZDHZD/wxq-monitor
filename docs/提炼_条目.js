@@ -196,7 +196,7 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
     const numM = String(first.text).match(/^([0-9]{1,2})[.、．](?![0-9])/);
     items.push({
       t: full.replace(/\s*·\s*/g, ' · '),
-      d: nameNew ? wrapNewBody(desc) : desc,
+      d: nameNew && verbatim !== 'plain' ? wrapNewBody(desc) : desc,
       _hero: (!!first.bold || (!!nk && nk.kind === 'hero')) && !TIER_LABEL_RE.test(full.trim()),
       /* 原文以冒号收尾（「…做如下调整：」），说明后面还有续段 */
       _cont: /[：:]\s*$/.test((body[body.length - 1] || '').trim()),

@@ -250,8 +250,8 @@
   .addBtn:hover { background: #21252e; border-color: #4d8bff; color: #b9cbff; }
   #btnFoldAll { margin-top: 8px; }
 
-  #importTip1, #importTip2, #portraitTip { margin-top: 8px; font-size: 11.5px; color: #616b7f; line-height: 1.6; }
-  #importTip1.err, #importTip2.err, #portraitTip.err { color: #ff8b8b; }
+  #importTip1, #portraitTip { margin-top: 8px; font-size: 11.5px; color: #616b7f; line-height: 1.6; }
+  #importTip1.err, #portraitTip.err { color: #ff8b8b; }
 
   #panelFoot { padding: 14px 18px; border-top: 1px solid var(--line); display: flex; gap: 10px; }
   #panelFoot button {
@@ -396,21 +396,12 @@
     </div>
 
     <div class="group" id="grpImport1">
-      <div class="label">第一章（核心玩法） <span class="hint">粘贴「公告提炼 → 复制第一章 JSON」的内容</span></div>
+      <div class="label">公告 JSON <span class="hint">粘贴「公告提炼 → 复制整篇 JSON」的内容</span></div>
       <div class="field">
-        <textarea id="importBox1" rows="6" placeholder="在这里粘贴第一章 JSON（公告提炼里点「复制第一章 JSON」）。导入后这一块会整体替换，不会重复叠加。"></textarea>
+        <textarea id="importBox1" rows="7" placeholder="在这里粘贴整篇 JSON（公告提炼里点「复制整篇 JSON」）：第一篇是第一章（局内），其余章节是局外原文。导入后整体替换，不会重复叠加。"></textarea>
       </div>
-      <button class="addBtn" id="btnImport1">导入第一章</button>
+      <button class="addBtn" id="btnImport1">导入整篇</button>
       <div id="importTip1"></div>
-    </div>
-
-    <div class="group" id="grpImport2">
-      <div class="label">第二～五章 <span class="hint">粘官方原文或 DeepSeek 返回的文本，都能识别</span></div>
-      <div class="field">
-        <textarea id="importBox2" rows="6" placeholder="直接粘官方原文也行（没有 ◆ ● ○ 符号，程序会自己认「名字：说明」这种文字标题）；也可以粘 DeepSeek 返回的带符号文本。"></textarea>
-      </div>
-      <button class="addBtn" id="btnImport2">导入后续章节</button>
-      <div id="importTip2"></div>
     </div>
 
     <div class="group">
@@ -450,7 +441,6 @@
 <script src="出图_交互.js"></script>
 <script src="出图_导入.js"></script>
 <script src="出图_数值表.js"></script>
-<script src="出图_文本导入.js"></script>
 <script src="出图_导入导出.js"></script>
 </body>
 </html>

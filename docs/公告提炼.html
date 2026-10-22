@@ -153,14 +153,12 @@
   <div id="toolbar">
     <div id="ironBar"><b>铁律</b>　忠于原文：不增、不减、不改写意思；数值变化一律写成「旧 → 新」，能写成箭头的不要写成「调整前 / 调整后」——但箭头必须能还原成「调整前：左；调整后：右」且与原文逐项对得上，只有机制变化才用「调整前：…；调整后：…」。</div>
     <label class="modeSwitch" title="勾选：第一章长句只写一遍，数值就地标「旧 → 新」；取消：整句两端全写"><input type="checkbox" id="inlineMode" checked /> 第一章长句精简</label>
-    <label class="modeSwitch" title="勾选：本篇没有「核心玩法更新」这一章，所有章节都按局外章节处理，整篇交给 AI"><input type="checkbox" id="noCore" /> 本篇没有第一章</label>
     <button class="ghost" id="btnAll">全选</button>
     <button class="ghost" id="btnNone">全不选</button>
     <div class="spacer"></div>
     <span id="count"></span>
-    <button id="btnPrompt">复制后续章节提示词</button>
-    <button id="btnCopy">复制第一章 JSON</button>
-    <button class="primary" id="btnDownload">导出第一章 JSON</button>
+    <button id="btnCopy">复制整篇 JSON</button>
+    <button class="primary" id="btnDownload">导出整篇 JSON</button>
   </div>
 
   <div id="scopeBar" hidden>
@@ -172,9 +170,8 @@
 
   <div class="tip">
     说明：抓取的是腾讯官方公告接口（newsid 来自链接里的 <code>newsid=</code>）。<br />
-    自动提炼按「调整前 / 调整后」做了合并，其余内容保留原文，勾选后导出。<br />
-    <b>第一章不用 AI</b>：「复制 / 导出第一章 JSON」直接粘进出图工具的第一块。<br />
-    <b>第二～五章用 AI</b>：「复制后续章节提示词」粘给 DeepSeek，把它返回的文本粘进出图工具的第二块。本篇只有第一章时这个按钮会提示不用。<br />
+    自动提炼按「调整前 / 调整后」合并了第一章，其余章节照抄公告原文，勾选后导出。<br />
+    <b>整篇一起导出</b>：第一篇是第一章（局内），其余章节是局外（原文），一次 JSON 直接粘进出图工具。<br />
     原文没有「核心玩法更新」总标题、但整篇都是局内内容时，会自动合并成一个总章节；判定不准可在结果上方取消勾选。
   </div>
 </div>
@@ -190,7 +187,6 @@ window.LEX = {"lords":["乔汐","姜导","嬴律","孙小宾","安琪拉","小�
 <script src="提炼_条目.js"></script>
 <script src="提炼_公告.js"></script>
 <script src="提炼_收集.js"></script>
-<script src="提炼_提示词.js"></script>
 <script src="提炼_事件.js"></script>
 </body>
 </html>

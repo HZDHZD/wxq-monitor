@@ -139,15 +139,12 @@ function applyPartFilter() {
   syncPartUI();
 }
 
-/* 编辑侧标签：只控制显示哪一块导入框和「+ 添加章节」，
-   局内固定只有第一章，新增章节一律进局外 */
+/* 编辑侧标签：「+ 添加章节」只在局外显示（第一章固定第一位） */
 function syncPartUI() {
   const inner = state.part === 'in';
   document.querySelectorAll('#fPart button').forEach(b => {
     b.classList.toggle('on', b.dataset.v === state.part);
   });
-  document.getElementById('grpImport1').style.display = inner ? '' : 'none';
-  document.getElementById('grpImport2').style.display = inner ? 'none' : '';
   document.getElementById('btnAddSec').style.display = inner ? 'none' : '';
 }
 

@@ -47,17 +47,7 @@ $('#btnParsePaste').onclick = () => {
 };
 
 $('#mergeCore').onchange = () => {
-  render(finalSections(rawSections, !noCoreMode && $('#mergeCore').checked), curMeta);
-};
-
-/* 本篇没有第一章：不套核心章节，整篇按第二～五章交给 AI */
-$('#noCore').onchange = () => {
-  noCoreMode = $('#noCore').checked;
-  if (!rawSections.length) return;
-  prepareAndRender(rawSections, curMeta);
-  setStatus(noCoreMode
-    ? '本篇没有第一章：所有章节按局外处理，用「复制后续章节提示词」把整篇交给 AI'
-    : '已恢复：第一章走 JSON，其余章节交给 AI', 'ok');
+  render(finalSections(rawSections, $('#mergeCore').checked), curMeta);
 };
 
 /* 第一章长句写法切换：精简（数值就地标箭头）↔ 全原文（整句两端全写） */
@@ -80,11 +70,10 @@ document.addEventListener('click', e => {
   document.querySelectorAll('.item .ck').forEach(c => { c.checked = false; });
   secEl.querySelectorAll('.item .ck').forEach(c => { c.checked = true; });
   refreshCount(); syncHead();
-  setStatus('只勾选了「' + secEl.dataset.name + '」，复制提示词后单独发给 DeepSeek', 'ok');
+  setStatus('只勾选了「' + secEl.dataset.name + '」', 'ok');
 });
 $('#btnDownload').onclick = downloadJSON;
 $('#btnCopy').onclick = copyJSON;
-$('#btnPrompt').onclick = copyPrompt;
 
 document.addEventListener('input', e => {
   if (e.target.classList.contains('d')) autoGrow(e.target);
@@ -101,18 +90,18 @@ document.addEventListener('change', e => {
   }
 });
 
-/* 自动化入口：抓取 + 解析，直接返回第一章数据（失败抛错，页面提示照常走） */
-async function autoFirstChapter(id) {
+/* 自动化入口：抓取 + 解析，返回整篇数据（第一章 + 局外原文） */
+async function autoNotice(id) {
   if (!await fetchAndParse(id)) throw new Error('抓取失败，请检查公告编号或网络');
-  return firstChapterData();
+  return wholeData();
 }
 
 /* 自动化入口：不给编号时，自动取最新一篇更新公告 */
 async function autoLatest() {
   const it = pickLatest(await loadNewsList(12));
   if (!it) throw new Error('没有取到公告列表');
-  return { id: it.id, title: it.title, data: await autoFirstChapter(it.id) };
+  return { id: it.id, title: it.title, data: await autoNotice(it.id) };
 }
 
 /* 供自动化测试 / 后续合并调用 */
-window.__wxq = { loadNews, loadNewsList, pickLatest, parseNotice, textToHtml, fetchAndParse, collect, buildDeepSeekText, autoFirstChapter, autoLatest };
+window.__wxq = { loadNews, loadNewsList, pickLatest, parseNotice, textToHtml, fetchAndParse, collect, autoNotice, autoLatest };

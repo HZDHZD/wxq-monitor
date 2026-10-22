@@ -27,14 +27,20 @@ function parseNotice(html) {
   /* 整篇没有章节标题（10.20 体验服这类只写「棋手调整 / 英雄调整」分组）：
      全文就是第一章，长句也要走全原文 / 就地精简 */
   const onlyChapter = !host.querySelector('h1');
+  /* 第一篇有名字的章节就是第一章（局内），沿用原来的全原文 / 精简逻辑；
+     后面的章节都是局外，完全照抄原文：不配对调整前后、不压箭头、不标金 */
+  let coreOpened = false;
   let flatBuf = [];
 
   const openSec = name => {
+    const nm = clean(name);
+    const isFirst = !coreOpened;
+    if (nm && !/^(未分类|其他|其它|正文)$/.test(nm)) coreOpened = true;
     sec = { name, groups: [] };
     sections.push(sec);
     grp = null;
     lastHeroItem = null;
-    secRaw = onlyChapter || RAW_SEC_RE.test(clean(name));
+    secRaw = isFirst ? (onlyChapter || RAW_SEC_RE.test(nm)) : 'plain';
   };
   const openGrp = name => {
     if (!sec) openSec('未分类');
@@ -161,7 +167,7 @@ function parseNotice(html) {
       /* 带「调整前 / 调整后」的条目是在改老内容，不是新增，标签再怎么写都不能当新增
          （正文此时已经压成箭头，所以要看原始行 _raw） */
       const rawAdj = Array.isArray(it._raw) ? it._raw.join('') : String(it.d || '');
-      if (markNew && it.t && !it.sub && !/^新增[：:]/.test(it.t)
+      if (markNew && secRaw !== 'plain' && it.t && !it.sub && !/^新增[：:]/.test(it.t)
         && !/调整前|调整后/.test(rawAdj)) {
         /* 前面已有「新增：」时，天赋名里的冒号改用间隔号，避免一行两个冒号 */
         it.t = '新增：' + it.t.replace(/^([^：:]{1,12})[：:]\s*(\S.{0,12})$/, '$1 · $2');
@@ -261,8 +267,9 @@ function parseNotice(html) {
     if (!grp) openGrp('');
     if (flat) { flatBuf.push(...lines); return; }
 
-    /* 「调整前 / 调整后」段落先攒着，遇到下一个普通段落或新标题时再统一配对 */
-    if (/^调整[前后]/.test(lines[0].text)) {
+    /* 「调整前 / 调整后」段落先攒着，遇到下一个普通段落或新标题时再统一配对。
+       局外章节原样照抄，不做配对 */
+    if (secRaw !== 'plain' && /^调整[前后]/.test(lines[0].text)) {
       adjLines = (adjLines || []).concat(lines.map(l => l.text));
       return;
     }
@@ -270,7 +277,7 @@ function parseNotice(html) {
 
     /* 标题段里夹着独立的「调整前」行（如「虞姬 / 调整前 / 觉醒前…」）：
        先把标题落成条目，后半段与下一段的「调整后」配对，避免拆成两张卡 */
-    const markIdx = lines.findIndex((l, k) => k > 0 && /^调整[前后][：:]?$/.test(l.text));
+    const markIdx = secRaw === 'plain' ? -1 : lines.findIndex((l, k) => k > 0 && /^调整[前后][：:]?$/.test(l.text));
     if (markIdx > 0) {
       pushItems(makeItems(lines.slice(0, markIdx), grp.name, chessScope(), false, markNew, guessNames, secRaw));
       adjLines = lines.slice(markIdx).map(l => l.text);

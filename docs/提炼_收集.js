@@ -96,7 +96,7 @@ let lastNotice = { html: '', meta: null };
 function prepareAndRender(sections, meta) {
   rawSections = sections;
   const bar = $('#scopeBar');
-  const canMerge = !noCoreMode && sections.length > 0 && !sections.some(s => isCoreName(s.name));
+  const canMerge = sections.length > 0 && !sections.some(s => isCoreName(s.name));
   bar.hidden = !canMerge;
   if (canMerge) {
     const auto = allInnerSections(sections);
@@ -358,66 +358,39 @@ function nestChessKids(sections) {
   return sections;
 }
 
-/* ====================  第一章 / 后续章节 分流  ==================== */
-/* 第一章不需要 AI：走 JSON，直接进出图的第一块。
-   第二～五章要挑重点，仍然交给 DeepSeek：走提示词，进出图的第二块。
-   两条路各走各的按钮，不再混在一个「追加」里 */
-/* 局内 / 局外只按位置切：页面上的第一篇就是第一章，与出图端一致。
-   不按名字找「核心玩法」——后面章节名里出现这四个字时会把局外章当成
-   第一章导出，真正第一章反而被交给 AI。
-   allNames 是页面上全部章节（含未勾选的）：第一章被整体取消勾选时 core
-   为空，不再拿第二章顶替 */
-function splitCore(sections, allNames) {
-  const list = sections || [];
-  /* 本篇没有第一章：整篇都是局外章节，全部按第二～五章交给 AI */
-  if (noCoreMode) return { core: [], rest: list.slice() };
-  const names = (allNames && allNames.length) ? allNames : list.map(s => String(s.name || ''));
-  if (!names.length) return { core: [], rest: list.slice() };
-  const first = list.find(s => String(s.name || '') === names[0]);
-  if (!first) return { core: [], rest: list.slice() };
-  return {
-    core: [first],
-    rest: list.filter(s => s !== first)
-  };
-}
-
-function allSecNames() {
-  return Array.from(document.querySelectorAll('.sec')).map(el => el.dataset.name || '');
-}
-
-/* 复制 / 下载 JSON 都只给第一章 */
-function firstChapterData() {
+/* ====================  导出  ==================== */
+/* 整篇一起给：第一篇是第一章（局内），其余章节是局外原文。
+   出图端只保留一个导入框，不再分两次导入、也不再经过 AI */
+function wholeData() {
   const data = collect();
   nestChessKids(data.sections);
-  return Object.assign({}, data, { sections: splitCore(data.sections, allSecNames()).core });
+  return data;
 }
 
 function downloadJSON() {
-  if (noCoreMode) { setStatus('本篇没有第一章；用「复制后续章节提示词」把整篇交给 AI', 'err'); return; }
-  const data = firstChapterData();
+  const data = wholeData();
   if (!data.sections.length) { setStatus('没有勾选任何条目', 'err'); return; }
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = '第一章.json';
+  a.download = '公告.json';
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-  setStatus('已导出第一章（' + data.sections.length + ' 个章节）', 'ok');
+  setStatus('已导出整篇（' + data.sections.length + ' 个章节）', 'ok');
 }
 
 async function copyJSON() {
-  if (noCoreMode) { setStatus('本篇没有第一章；用「复制后续章节提示词」把整篇交给 AI', 'err'); return; }
-  const data = firstChapterData();
-  if (!data.sections.length) { setStatus('第一章没有勾选任何条目', 'err'); return; }
+  const data = wholeData();
+  if (!data.sections.length) { setStatus('没有勾选任何条目', 'err'); return; }
   const txt = JSON.stringify(data, null, 2);
   try {
     await navigator.clipboard.writeText(txt);
-    setStatus('第一章 JSON 已复制到剪贴板', 'ok');
+    setStatus('整篇 JSON 已复制到剪贴板', 'ok');
   } catch (e) {
     const ta = document.createElement('textarea');
     ta.value = txt; document.body.appendChild(ta); ta.select();
     document.execCommand('copy'); ta.remove();
-    setStatus('第一章 JSON 已复制', 'ok');
+    setStatus('整篇 JSON 已复制', 'ok');
   }
 }
 

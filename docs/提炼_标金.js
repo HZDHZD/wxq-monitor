@@ -499,6 +499,10 @@ function markChangedVals(text, lines) {
 }
 
 function buildDesc(lines, verbatim) {
+  /* 局外章节：公告原文原样照抄，不合并、不压箭头、不补标点、不标金 */
+  if (verbatim === 'plain') {
+    return lines.map(s => String(s).trim()).filter(Boolean).join('\n');
+  }
   let out = splitNumberedRules(splitActivityLines(buildDescRaw(lines, verbatim)));
   if (verbatim) {
     /* 全原文照抄时，编号小标题（2.战术特性 / 3.武器特性）另起一行，不跟在分号后面 */
