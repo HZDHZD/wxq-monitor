@@ -338,13 +338,14 @@ elFoot.value = state.foot;
 buildEditor();
 render();
 
-/* =======================  自动填充：网址带 ?newsid=  ======================= */
+/* =======================  自动填充  ======================= */
 /* 解析规则只放在「公告提炼」里：出图页藏一个看不见的提炼页让它干活，
-   拿到第一章数据后走同一个导入入口，避免两套规则各写一遍 */
-async function autoFillFromNewsid(id) {
+   拿到第一章数据后走同一个导入入口，避免两套规则各写一遍。
+   getData(提炼页window) 自己决定抓哪一篇：带 ?newsid= 就抓那篇，不带就取最新 */
+async function autoFill(getData, statusText) {
   const tip = document.getElementById('importTip1');
   tip.className = '';
-  tip.textContent = '正在抓取公告并解析第一章…';
+  tip.textContent = statusText;
   const frame = document.createElement('iframe');
   frame.style.display = 'none';
   frame.src = '公告提炼.html';
@@ -355,10 +356,11 @@ async function autoFillFromNewsid(id) {
       frame.onload = () => { clearTimeout(timer); ok(); };
       frame.onerror = () => { clearTimeout(timer); bad(new Error('提炼页加载失败')); };
     });
-    const data = await frame.contentWindow.__wxq.autoFirstChapter(id);
-    if (!data || !data.sections.length) throw new Error('这篇公告里没有第一章内容');
-    document.getElementById('importBox1').value = JSON.stringify(data, null, 2);
+    const got = await getData(frame.contentWindow);
+    if (!got.data || !got.data.sections.length) throw new Error('这篇公告里没有第一章内容');
+    document.getElementById('importBox1').value = JSON.stringify(got.data, null, 2);
     importInto(1, 'importTip1');
+    if (got.title) tip.textContent = '《' + got.title + '》　' + tip.textContent;
   } catch (e) {
     tip.className = 'err';
     tip.textContent = '自动填充失败：' + (e.message || e) + '（仍可手动粘贴导入）';
@@ -368,13 +370,19 @@ async function autoFillFromNewsid(id) {
 }
 
 (function autoStart() {
-  const id = new URLSearchParams(location.search).get('newsid');
-  if (!id) return;
   if (location.protocol === 'file:') {
     const tip = document.getElementById('importTip1');
     tip.className = 'err';
     tip.textContent = '自动填充要用网址打开（双击本地文件不行），手动粘贴照常可用。';
     return;
   }
-  autoFillFromNewsid(id);
+  const id = new URLSearchParams(location.search).get('newsid');
+  if (id) {
+    autoFill(async w => ({ data: await w.__wxq.autoFirstChapter(id), title: '' }), '正在抓取公告并解析第一章…');
+  } else {
+    autoFill(async w => {
+      const r = await w.__wxq.autoLatest();
+      return { data: r.data, title: r.title };
+    }, '正在找最新一篇更新公告…');
+  }
 })();

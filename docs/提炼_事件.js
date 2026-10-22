@@ -107,5 +107,12 @@ async function autoFirstChapter(id) {
   return firstChapterData();
 }
 
+/* 自动化入口：不给编号时，自动取最新一篇更新公告 */
+async function autoLatest() {
+  const it = pickLatest(await loadNewsList(12));
+  if (!it) throw new Error('没有取到公告列表');
+  return { id: it.id, title: it.title, data: await autoFirstChapter(it.id) };
+}
+
 /* 供自动化测试 / 后续合并调用 */
-window.__wxq = { loadNews, parseNotice, textToHtml, fetchAndParse, collect, buildDeepSeekText, autoFirstChapter };
+window.__wxq = { loadNews, loadNewsList, pickLatest, parseNotice, textToHtml, fetchAndParse, collect, buildDeepSeekText, autoFirstChapter, autoLatest };
