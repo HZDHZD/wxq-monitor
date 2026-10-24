@@ -1,9 +1,121 @@
 /* 本文件由 出图.html 拆出，按函数名定位（行号会漂移） */
 
+/* =======================  导入后质检  ======================= */
+/* 只在提示区列问题，不改内容。文本与技能归属由提炼页算出随 JSON 带来；
+   结构、立绘在这里就地检查 */
+let auditTasks = [];
+function auditStructure(secs) {
+  const out = [];
+  secs.forEach((s, si) => {
+    if (si > 0 && !String(s.name || '').trim()) out.push({ si, msg: `第${si + 1}章没有章节名` });
+    (s.groups || []).forEach((g, gi) => {
+      if (!String(g.name || '').trim()) {
+        out.push({ si, gi, msg: `第${si + 1}章「${s.name || '未命名'}」第${gi + 1}组没有组名` });
+      }
+      (g.items || []).forEach((it, ii) => {
+        if (!String(it.t || '').trim() && String(it.d || '').trim()) {
+          out.push({ si, gi, ii, msg: `第${si + 1}章 · ${g.name || '未命名组'} · 第${ii + 1}条：有正文没标题` });
+        }
+      });
+    });
+  });
+  return out;
+}
+/* 质检条目都带 si/gi/ii，点一下能跳到编辑器里对应的那条 */
+function renderAudit(secs, audit) {
+  const wrap = document.getElementById('auditWrap');
+  const head = document.getElementById('auditHead');
+  const box = document.getElementById('auditBox');
+  if (!wrap || !head || !box) return;
+  auditTasks = [];
+  const text = audit && audit.text;
+  let note = '';
+  if (text) {
+    if (text.bad.length) {
+      text.bad.forEach(b => auditTasks.push(typeof b === 'string'
+        ? { msg: '原文对不上 · ' + b }
+        : Object.assign({}, b, { msg: '原文对不上 · ' + b.msg })));
+    } else note = `局外正文 ${text.total} 行与原文一致`;
+  } else {
+    note = '未核对原文（这份 JSON 不是从提炼页导出的）';
+  }
+  ((audit && audit.own) || []).forEach(x => auditTasks.push(typeof x === 'string'
+    ? { msg: '归属 · ' + x }
+    : Object.assign({}, x, { msg: '归属 · ' + x.msg })));
+  auditStructure(secs).forEach(x => auditTasks.push(x));
+  const miss = missingPortraits();
+  if (miss.length) auditTasks.push({ msg: '缺立绘 · ' + miss.join('、') });
+  /* 质检块默认收起：只在标题栏留一个按钮，点开才占位 */
+  const btn = document.getElementById('btnAudit');
+  if (btn) {
+    btn.hidden = false;
+    btn.classList.toggle('ok', !auditTasks.length);
+    btn.textContent = auditTasks.length ? `质检 ${auditTasks.length}` : '质检通过';
+  }
+  head.classList.toggle('ok', !auditTasks.length);
+  head.textContent = auditTasks.length ? '质检项（点条目跳到对应位置）' : '质检通过';
+  box.innerHTML = (note ? `<div class="auditNote">${esc(note)}</div>` : '')
+    + auditTasks.map((x, i) => `<div class="auditItem" data-k="${i}">${esc(x.msg)}</div>`).join('');
+  setAuditOpen(false);
+}
+/* 质检块开合：默认收起，按标题栏的「质检」按钮才展开 */
+let auditOpen = false;
+function setAuditOpen(open) {
+  auditOpen = !!open;
+  const wrap = document.getElementById('auditWrap');
+  const btn = document.getElementById('btnAudit');
+  if (wrap) wrap.style.display = open ? 'block' : 'none';
+  if (btn) btn.classList.toggle('on', open);
+}
+/* 导入/清空时把质检块一起收起来 */
+function clearAudit() {
+  const wrap = document.getElementById('auditWrap');
+  const head = document.getElementById('auditHead');
+  const box = document.getElementById('auditBox');
+  const btn = document.getElementById('btnAudit');
+  if (wrap) wrap.style.display = 'none';
+  if (head) { head.classList.remove('ok'); head.textContent = '质检'; }
+  if (box) box.innerHTML = '';
+  if (btn) {
+    btn.hidden = true;
+    btn.classList.remove('on', 'ok');
+    btn.textContent = '质检';
+  }
+  auditTasks = [];
+  auditOpen = false;
+}
+/* 切到对应篇（局内/局外）→ 展开折叠 → 滚到那条并闪一下 */
+function auditJump(t) {
+  if (!t || t.si == null) return;
+  const sec = state.sections[t.si];
+  if (!sec) return;
+  state.part = t.si === 0 ? 'in' : 'out';
+  folded.delete(sec);
+  const grp = (sec.groups || [])[t.gi];
+  if (grp) folded.delete(grp);
+  buildEditor();
+  const secBox = elSections.children[t.si];
+  const gBox = secBox && secBox.querySelectorAll(':scope > .secBody > .grpBox')[t.gi];
+  const row = gBox && (t.ii == null
+    ? gBox.querySelector(':scope > .grpHead')
+    : gBox.querySelectorAll(':scope > .grpBody > .itemRow')[t.ii]);
+  if (!row) return;
+  const prev = document.querySelector('.auditHit');
+  if (prev) prev.classList.remove('auditHit');
+  row.scrollIntoView({ block: 'center' });
+  row.classList.add('auditHit');      /* 高亮留到下次点击，方便对照 */
+}
+document.getElementById('auditBox').addEventListener('click', e => {
+  const d = e.target.closest('[data-k]');
+  if (d) auditJump(auditTasks[+d.dataset.k]);
+});
+document.getElementById('btnAudit').addEventListener('click', () => setAuditOpen(!auditOpen));
+
 /* 只导一次：整篇 JSON（第一章 + 局外各章）。重复导入整体替换，不叠加 */
 function importInto(tipEl) {
   const box = document.getElementById('importBox1');
   const tip = document.getElementById(tipEl);
+  clearAudit();
   const meta = extractMeta(box.value);
   const parsed = parseJSONSections(meta.text);
   const secs = parsed ? normalizeSections(parsed) : [];
@@ -13,6 +125,11 @@ function importInto(tipEl) {
     return;
   }
   state.sections = secs;
+  let audit = null;
+  try {
+    const o = JSON.parse(meta.text);
+    if (o && !Array.isArray(o)) audit = o.audit || null;
+  } catch (_) { /* 不是对象就视为没有自查结果 */ }
 
   if (meta.server) { state.server = meta.server; setServerUI(); }
   if (meta.date) { state.date = meta.date; setDateUI(); }
@@ -26,11 +143,13 @@ function importInto(tipEl) {
   tip.className = '';
   tip.textContent = `已导入整篇：${secs.length} 个章节 / ${g} 个分组 / ${n} 个条目`
     + (recognized ? `；已识别 ${recognized}` : '');
+  renderAudit(secs, audit);
 }
 
 document.getElementById('btnImport1').addEventListener('click', () => importInto('importTip1'));
 
 document.getElementById('btnSample').addEventListener('click', () => {
+  clearAudit();
   state.date = SAMPLE.date; state.server = SAMPLE.server; state.foot = SAMPLE.foot;
   state.sections = JSON.parse(JSON.stringify(SAMPLE.sections));
   syncTitles();
@@ -38,29 +157,7 @@ document.getElementById('btnSample').addEventListener('click', () => {
   buildEditor(); render();
 });
 
-/* ---------- 棋手立绘：从素材文件夹按文件名载入 ---------- */
-/* 支持：08_皮肤 每个棋手子文件夹里的「棋手名-封面.jpg」（原皮封面，优先），
-   03_棋手KV 的「棋手名-KV竖版.jpg / 棋手名-KV横版.jpg」（有背景），
-   04_透明立绘 的「棋手名-立绘PC.png / 棋手名-立绘M.png」，以及旧的「棋手名-棋手立绘.jpg」 */
-const PORTRAIT_FILE_RE = /^(.+?)-(封面|KV横版|KV竖版|立绘PC|立绘M|棋手立绘)\.(png|jpe?g|webp)$/i;
-/* 同名多张时的优先级：原皮封面最优先，其次 KV横版 */
-const PORTRAIT_RANK = { '封面': 0, 'kv横版': 1, 'kv竖版': 2, '立绘pc': 3, '立绘m': 4, '棋手立绘': 5 };
-const portraitRank = kind => {
-  const v = PORTRAIT_RANK[String(kind || '').toLowerCase()];
-  return v === undefined ? 9 : v;
-};
-let portraitURLs = [];
-
-function loadPortraitFile(file) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const im = new Image();
-    im.onload = () => resolve({ im, url });
-    im.onerror = () => { URL.revokeObjectURL(url); reject(new Error('load fail')); };
-    im.src = url;
-  });
-}
-
+/* ---------- 棋手立绘：已内置在 出图_立绘.js 的 PORTRAITS 里 ---------- */
 /* 当前公告里出现、但字典里没有的棋手名 */
 function missingPortraits() {
   const out = new Set();
@@ -73,60 +170,6 @@ function missingPortraits() {
   }));
   return Array.from(out);
 }
-
-document.getElementById('btnPortraits').addEventListener('click', () => {
-  document.getElementById('portraitDir').click();
-});
-
-document.getElementById('portraitDir').addEventListener('change', async (e) => {
-  const tip = document.getElementById('portraitTip');
-  const picked = {};
-  Array.from(e.target.files || []).forEach(f => {
-    const m = String(f.name || '').match(PORTRAIT_FILE_RE);
-    if (!m) return;
-    const name = m[1].trim(), kind = m[2];
-    /* 「08_皮肤」里同一棋手有多套皮肤封面，只认原皮：文件名必须和所在子文件夹同名 */
-    if (/^封面$/i.test(kind)) {
-      const parts = String(f.webkitRelativePath || '').split('/');
-      const dir = (parts[parts.length - 2] || '').trim();
-      if (!dir || dir !== name) return;
-    }
-    if (!picked[name] || portraitRank(kind) < portraitRank(picked[name].kind)) {
-      picked[name] = { file: f, kind };
-    }
-  });
-  const names = Object.keys(picked);
-  if (!names.length) {
-    tip.className = 'err';
-    tip.textContent = '没找到立绘文件。请选「08_皮肤（每套皮肤封面与KV）」（取原皮封面）、「03_棋手KV（带背景宣传图）」或「04_透明立绘（去背景透明PNG）」文件夹。';
-    e.target.value = '';
-    return;
-  }
-
-  portraitURLs.forEach(u => URL.revokeObjectURL(u));
-  portraitURLs = [];
-
-  let loaded = 0;
-  for (const name of names) {
-    try {
-      const { im, url } = await loadPortraitFile(picked[name].file);
-      PORTRAITS[name] = url;
-      PORTRAIT_IMGS[name] = im;
-      portraitURLs.push(url);
-      loaded++;
-    } catch (_) { /* 单张坏图跳过 */ }
-  }
-
-  render();
-  const miss = missingPortraits();
-  tip.className = loaded ? '' : 'err';
-  tip.textContent = loaded
-    ? `已载入 ${loaded} 位棋手立绘` + (miss.length
-        ? `；本公告还有未匹配：${miss.slice(0, 8).join('、')}${miss.length > 8 ? ' 等' : ''}`
-        : '；本公告里的棋手都已匹配')
-    : '立绘文件读取失败，换个文件夹再试。';
-  e.target.value = '';
-});
 
 /* ---------- 导出：一次选好文件夹 / 一次下载，不再逐张弹「另存为」 ---------- */
 function exportBase() {

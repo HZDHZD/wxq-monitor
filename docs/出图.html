@@ -36,6 +36,19 @@
   }
   #panelHead { padding: 16px 18px 12px; border-bottom: 1px solid var(--line); }
   #panelHead h1 { font-size: 15px; font-weight: 700; letter-spacing: .5px; }
+  .headRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .headBtns { flex: none; display: flex; gap: 6px; }
+  .headBtn {
+    flex: none; padding: 3px 9px; font-family: inherit;
+    font-size: 11px; font-weight: 700;
+    color: #d8a94e; background: #2a2416;
+    border: 1px solid #4a3a12; border-radius: 6px; cursor: pointer;
+  }
+  .headBtn:hover { color: #ffe45c; border-color: #6a5418; }
+  #btnAudit.ok { color: #6fae7f; background: #1b2a1f; border-color: #2f4a35; }
+  #btnAudit.on { color: #14161c; background: #d8a94e; border-color: #d8a94e; }
+  #btnAudit.on.ok { background: #6fae7f; border-color: #6fae7f; }
+  #btnSort.on { color: #fff; background: var(--accent); border-color: var(--accent); }
   #panelHead p { font-size: 12px; color: var(--sub); margin-top: 4px; }
 
   #panelBody { flex: 1; overflow-y: auto; padding: 16px 18px 20px; }
@@ -249,9 +262,41 @@
   }
   .addBtn:hover { background: #21252e; border-color: #4d8bff; color: #b9cbff; }
   #btnFoldAll { margin-top: 8px; }
+  /* 排序视图：只留纯标题卡片，没有输入框，整张卡按住就能拖 */
+  #sections.sort .secBox { margin-bottom: 8px; }
+  #sections.sort .secBody { padding: 8px; }
+  #sections.sort .grpBox { margin-bottom: 6px; }
+  #sections.sort .grpBody { padding: 6px; }
+  #sections.sort .secHead, #sections.sort .grpHead { padding: 8px 10px; cursor: grab; }
+  #sections.sort .itemRow {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; margin-bottom: 6px; cursor: grab;
+  }
+  .sortName {
+    flex: 1; min-width: 0; font-size: 12.5px; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sortNo {
+    flex: none; width: 20px; height: 20px; border-radius: 6px;
+    background: #333846; color: var(--sub); font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .sortCnt { flex: none; font-size: 11px; color: #616b7f; }
+  .sortLock { flex: none; font-size: 11px; }
 
-  #importTip1, #portraitTip { margin-top: 8px; font-size: 11.5px; color: #616b7f; line-height: 1.6; }
-  #importTip1.err, #portraitTip.err { color: #ff8b8b; }
+  #importTip1 { margin-top: 8px; font-size: 11.5px; color: #616b7f; line-height: 1.6; }
+  #importTip1.err { color: #ff8b8b; }
+  #auditWrap { display: none; padding: 8px 18px 10px; border-bottom: 1px solid var(--line); }
+  #auditHead { font-size: 12px; font-weight: 700; color: #d8a94e; margin-bottom: 4px; }
+  #auditHead.ok { color: #6fae7f; }
+  #auditBox { max-height: 132px; overflow-y: auto; font-size: 11.5px; line-height: 1.65; color: #8a94a8; }
+  #auditBox::-webkit-scrollbar { width: 6px; }
+  #auditBox::-webkit-scrollbar-thumb { background: #333846; border-radius: 3px; }
+  #auditBox .auditOk { color: #6fae7f; }
+  #auditBox .auditNote { color: #616b7f; }
+  #auditBox .auditItem { cursor: pointer; padding: 1px 0; }
+  #auditBox .auditItem:hover { color: #d8a94e; text-decoration: underline; }
+  .itemRow.auditHit, .grpHead.auditHit { outline: 2px solid #d8a94e; outline-offset: 2px; border-radius: 8px; }
 
   #panelFoot { padding: 14px 18px; border-top: 1px solid var(--line); display: flex; gap: 10px; }
   #panelFoot button {
@@ -348,8 +393,20 @@
 
 <div id="panel">
   <div id="panelHead">
-    <h1>更新公告重点 · 出图工具</h1>
+    <div class="headRow">
+      <h1>更新公告重点 · 出图工具</h1>
+      <div class="headBtns">
+        <button id="btnSort" class="headBtn" type="button">排序视图</button>
+        <button id="btnAudit" class="headBtn" type="button" hidden>质检</button>
+      </div>
+    </div>
     <p>填内容 → 导出 1080×1920 PNG</p>
+  </div>
+
+  <!-- 质检单独一块：固定在编辑区上方，点条目跳到正文时这一块不跟着滚 -->
+  <div id="auditWrap">
+    <div id="auditHead">质检</div>
+    <div id="auditBox"></div>
   </div>
 
   <div id="panelBody">
@@ -381,13 +438,6 @@
     </div>
 
     <div class="group">
-      <div class="label">棋手立绘 <span class="hint">选「08_皮肤」文件夹，自动取每位棋手的原皮封面</span></div>
-      <input type="file" id="portraitDir" webkitdirectory multiple hidden />
-      <button class="addBtn" id="btnPortraits">从素材文件夹载入立绘</button>
-      <div id="portraitTip"></div>
-    </div>
-
-    <div class="group">
       <div class="label">编辑范围 <span class="hint">局内 = 第一章（核心玩法），局外 = 其余章节；只影响下面显示哪一部分</span></div>
       <div class="field seg" id="fPart">
         <button type="button" data-v="in" class="on">局内</button>
@@ -405,7 +455,7 @@
     </div>
 
     <div class="group">
-      <div class="label">重点内容 <span class="hint">章节 → 分组 → 条目；点 ▾ 折叠只剩标题，方便拖动换位（第一章固定第一位、不可拖动/删除，分组/条目仍可拖）</span></div>
+      <div class="label">重点内容 <span class="hint">章节 → 分组 → 条目；拖卡片换位，或点「排序视图」只看标题、整张卡按住就拖（第一章固定第一位）</span></div>
       <div id="sections"></div>
       <button class="addBtn" id="btnAddSec">+ 添加章节</button>
       <button class="addBtn" id="btnFoldAll">全部折叠</button>

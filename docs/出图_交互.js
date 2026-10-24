@@ -19,6 +19,8 @@ function isCoreSec(sec) {
 
 /* 折叠状态：以章节 / 分组对象为键，重建编辑器后依然保持；不写入导出数据 */
 const folded = new WeakSet();
+/* 排序视图：只显示纯标题卡片，没有输入框，整张卡按住就能拖，换位最省事 */
+let sortMode = false;
 
 /* 说明类文本框随内容自动撑高，手动换行插在哪一行一眼能看到 */
 function autoGrow(el) {
@@ -29,12 +31,21 @@ function autoGrow(el) {
 
 function buildEditor() {
   elSections.innerHTML = '';
+  elSections.classList.toggle('sort', sortMode);
   state.sections.forEach((sec, si) => {
     const box = document.createElement('div');
     const lockSec = si === 0;
-    const secFold = folded.has(sec);
-    box.className = 'secBox' + (secFold ? ' folded' : '');
-    box.innerHTML = `
+    const secFold = !sortMode && folded.has(sec);
+    box.className = 'secBox' + (secFold ? ' folded' : '') + (sortMode ? ' sortSec' : '');
+    box.innerHTML = sortMode
+      ? `<div class="secHead">
+           <span class="tag">章节${si === 0 ? 1 : si}</span>
+           <span class="sortName">${esc(sec.name) || '（未命名章节）'}</span>
+           <span class="sortCnt">${(sec.groups || []).length} 组</span>
+           ${lockSec ? '<span class="sortLock" title="第一章固定第一位">🔒</span>' : ''}
+         </div>
+         <div class="secBody"></div>`
+      : `
       <div class="secHead">
         <button class="fold" data-act="foldSec" title="${secFold ? '展开本章' : '折叠本章，只留标题便于换位'}">${secFold ? '▸' : '▾'}</button>
         <span class="grip${lockSec ? ' lock' : ''}" title="${lockSec ? '第一章固定第一位，不可拖动' : '按住标题栏拖动换位'}">${lockSec ? '🔒' : '⠿'}</span>
@@ -52,9 +63,16 @@ function buildEditor() {
 
     (sec.groups || []).forEach((grp, gi) => {
       const gbox = document.createElement('div');
-      const grpFold = folded.has(grp);
-      gbox.className = 'grpBox' + (grpFold ? ' folded' : '');
-      gbox.innerHTML = `
+      const grpFold = !sortMode && folded.has(grp);
+      gbox.className = 'grpBox' + (grpFold ? ' folded' : '') + (sortMode ? ' sortGrp' : '');
+      gbox.innerHTML = sortMode
+        ? `<div class="grpHead">
+             <span class="tag">分组</span>
+             <span class="sortName">${esc(grp.name) || '（未命名分组）'}</span>
+             <span class="sortCnt">${(grp.items || []).length} 条</span>
+           </div>
+           <div class="grpBody"></div>`
+        : `
         <div class="grpHead">
           <button class="fold" data-act="foldGrp" title="${grpFold ? '展开本组' : '折叠本组'}">${grpFold ? '▸' : '▾'}</button>
           <span class="grip" title="按住标题栏拖动换位">⠿</span>
@@ -72,8 +90,23 @@ function buildEditor() {
 
       (grp.items || []).forEach((it, ii) => {
         const row = document.createElement('div');
-        row.className = 'itemRow';
+        row.className = 'itemRow' + (sortMode ? ' sortItem' : '');
         const kids = Array.isArray(it.kids) ? it.kids : [];
+        /* 排序视图：只留名字和序号，整张卡都能抓，不用找空白处 */
+        if (sortMode) {
+          /* 没标题的条目拿正文首行顶替，截前 24 字，够认出是哪条，悬停可看完整首行 */
+          const title = String(it.t || '').trim();
+          const firstLine = String(it.d || '').split(/\r?\n/).map(s => s.trim()).find(Boolean) || '';
+          const shown = title || (firstLine
+            ? firstLine.slice(0, 24) + (firstLine.length > 24 ? '…' : '')
+            : '（空条目）');
+          row.innerHTML = `
+            <span class="sortNo">${ii + 1}</span>
+            <span class="sortName"${!title && firstLine ? ` title="${esc(firstLine)}"` : ''}>${esc(shown)}</span>
+            ${kids.length ? `<span class="sortCnt">${kids.length} 技能</span>` : ''}`;
+          gbody.appendChild(row);
+          return;
+        }
         /* 棋手组里的条目都允许挂技能；技能本身没有拖拽手柄，只能跟着棋手整体移动 */
         const canKid = kids.length || isChessName(it.t) || /棋手/.test(grp.name || '');
         const kidHtml = kids.map(k => `
@@ -106,18 +139,22 @@ function buildEditor() {
         gbody.appendChild(row);
       });
 
-      const addIt = document.createElement('button');
-      addIt.className = 'miniAdd';
-      addIt.textContent = '+ 添加条目';
-      addIt.dataset.act = 'addItem';
-      gbody.appendChild(addIt);
+      if (!sortMode) {
+        const addIt = document.createElement('button');
+        addIt.className = 'miniAdd';
+        addIt.textContent = '+ 添加条目';
+        addIt.dataset.act = 'addItem';
+        gbody.appendChild(addIt);
+      }
     });
 
-    const addGrp = document.createElement('button');
-    addGrp.className = 'miniAdd';
-    addGrp.textContent = '+ 添加分组';
-    addGrp.dataset.act = 'addGrp';
-    body.appendChild(addGrp);
+    if (!sortMode) {
+      const addGrp = document.createElement('button');
+      addGrp.className = 'miniAdd';
+      addGrp.textContent = '+ 添加分组';
+      addGrp.dataset.act = 'addGrp';
+      body.appendChild(addGrp);
+    }
   });
 
   elSections.querySelectorAll('textarea').forEach(autoGrow);
@@ -145,7 +182,7 @@ function syncPartUI() {
   document.querySelectorAll('#fPart button').forEach(b => {
     b.classList.toggle('on', b.dataset.v === state.part);
   });
-  document.getElementById('btnAddSec').style.display = inner ? 'none' : '';
+  document.getElementById('btnAddSec').style.display = (inner || sortMode) ? 'none' : '';
 }
 
 document.getElementById('fPart').addEventListener('click', e => {
@@ -325,10 +362,14 @@ function onDragMove(e) {
     const ref = after ? target.nextSibling : target;
     if (ref !== ctx.el) target.parentElement.insertBefore(ctx.el, ref);
   }
-  /* 拖到窗口上下边缘时自动滚动，长列表也能拖到底 */
-  const edge = 70;
-  if (e.clientY < edge) window.scrollBy(0, -12);
-  else if (e.clientY > window.innerHeight - edge) window.scrollBy(0, 12);
+  /* 拖到编辑区上下边缘时自动滚动，长列表也能拖到底 */
+  const sc = document.getElementById('panelBody');
+  if (sc) {
+    const r = sc.getBoundingClientRect();
+    const edge = 50;
+    if (e.clientY < r.top + edge) sc.scrollBy(0, -14);
+    else if (e.clientY > r.bottom - edge) sc.scrollBy(0, 14);
+  }
 }
 
 function onDragUp() {
@@ -391,6 +432,16 @@ document.getElementById('btnFoldAll').addEventListener('click', () => {
   const allFolded = state.sections.length > 0 && state.sections.every(s => folded.has(s));
   state.sections.forEach(s => { if (allFolded) folded.delete(s); else folded.add(s); });
   buildEditor(); render();
+});
+
+/* 排序视图：纯标题卡片，整张卡按住就能拖；再点一次回编辑视图 */
+const btnSort = document.getElementById('btnSort');
+btnSort.addEventListener('click', () => {
+  sortMode = !sortMode;
+  btnSort.textContent = sortMode ? '退出排序' : '排序视图';
+  btnSort.classList.toggle('on', sortMode);
+  document.getElementById('btnFoldAll').style.display = sortMode ? 'none' : '';
+  buildEditor();
 });
 
 document.getElementById('btnAddSec').addEventListener('click', () => {

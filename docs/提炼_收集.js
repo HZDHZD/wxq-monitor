@@ -358,12 +358,65 @@ function nestChessKids(sections) {
   return sections;
 }
 
+/* ====================  导出自查  ==================== */
+/* 结果随 JSON 带给出图页显示，只提示不改内容。
+   文本：局外每条正文行都要能在公告原文里找到（防解析改写 / 漏行）
+   归属：技能挂到的棋手和名单里的归属是否一致 */
+function auditNorm(s) {
+  return String(s || '')
+    .replace(/[\uE000-\uF8FF\uFFFD]/g, '')
+    .replace(/\s+/g, '')
+    .replace(/([，,。．.；;：:、])\1+/g, '$1');
+}
+function auditNotice(data) {
+  const out = { text: null, own: [] };
+  if (!lastNotice.html) return out;
+  const d = document.createElement('div');
+  d.innerHTML = String(lastNotice.html).replace(/<br\s*\/?>/gi, '\n');
+  const raw = auditNorm(d.textContent || '');
+  if (raw) {
+    let total = 0;
+    const bad = [];
+    data.sections.forEach((sec, si) => {
+      if (!si) return;                       /* 第一章本来就压缩，不参与原文比对 */
+      sec.groups.forEach((g, gi) => g.items.forEach((it, ii) => {
+        String(it.d || '').split('\n').forEach(line => {
+          const n = auditNorm(line);
+          if (!n) return;
+          total++;
+          if (!raw.includes(n) && bad.length < 20) {
+            bad.push({ si, gi, ii, sec: sec.name, item: it.t,
+              msg: `${it.t || '无标题'}：${line.trim().slice(0, 40)}` });
+          }
+        });
+      }));
+    });
+    out.text = { total, bad };
+  }
+  data.sections.forEach((sec, si) => sec.groups.forEach((g, gi) => {
+    if (!/棋手/.test(g.name || '')) return;
+    g.items.forEach((it, ii) => {
+      (it.kids || []).forEach(k => {
+        if (out.own.length >= 20) return;
+        const owner = skillOwner(k.t);
+        const name = String(it.t || '').split(/[·・|｜\-—–\s]/)[0].replace(/【.*?】/g, '');
+        const msg = !owner
+          ? `${it.t} → ${k.t}：名单里没有，需人工确认`
+          : (name && !name.includes(owner) ? `${it.t} → ${k.t}：名单归属「${owner}」，可能挂错` : '');
+        if (msg) out.own.push({ si, gi, ii, msg });
+      });
+    });
+  }));
+  return out;
+}
+
 /* ====================  导出  ==================== */
 /* 整篇一起给：第一篇是第一章（局内），其余章节是局外原文。
    出图端只保留一个导入框，不再分两次导入、也不再经过 AI */
 function wholeData() {
   const data = collect();
   nestChessKids(data.sections);
+  data.audit = auditNotice(data);
   return data;
 }
 
