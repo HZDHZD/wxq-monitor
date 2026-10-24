@@ -225,6 +225,40 @@ async function dirHandleFor(root, path) {
   for (const seg of path.split('/').filter(Boolean)) d = await d.getDirectoryHandle(seg, { create: true });
   return d;
 }
+/* =======================  导出水印  ======================= */
+/* 斜向平铺水印，参数沿用「加水印工具/watermark.py」：字体 40px、间距 294×212、
+   倾角 28°、不透明度 34/255、深蓝 rgb(31,78,121)，按 1080×1440 为基准等比缩放。
+   只画在导出的 PNG 上；导出结束后的 render() 会把预览恢复干净 */
+const WM_TEXT = '万象棋小菜鸟';       /* 要换水印文字只改这一行 */
+function drawWatermark(ctx, W, H) {
+  const k = Math.min(3, Math.max(0.35, Math.sqrt((W * H) / (1080 * 1440))));
+  const fontPx = Math.round(Math.min(130, Math.max(14, 40 * k)));
+  const stepX = Math.max(108, 294 * k), stepY = Math.max(80, 212 * k);
+  const base = 34, ang = 28 * Math.PI / 180;
+  /* 固定种子的伪随机：同一张图每次加的疏密/角度抖动都一样 */
+  let seed = 7;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  ctx.save();
+  ctx.font = `700 ${fontPx}px "Microsoft YaHei", "微软雅黑", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgb(31,78,121)';
+  const tw = ctx.measureText(WM_TEXT).width * Math.cos(ang) + fontPx * Math.sin(ang);
+  const th = ctx.measureText(WM_TEXT).width * Math.sin(ang) + fontPx * Math.cos(ang);
+  for (let row = 0, y = 0; y < H + th; y += th + stepY, row++) {
+    const off = row % 2 ? (tw + stepX) / 2 : 0;   /* 砖墙错格 */
+    for (let x = -tw / 2 + off; x < W + tw; x += tw + stepX) {
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, Math.max(0, base + Math.round((rnd() - 0.5) * 12)) / 255);
+      ctx.translate(x + (rnd() - 0.5) * 0.3 * stepX, y + (rnd() - 0.5) * 0.3 * stepY);
+      ctx.rotate(ang + (rnd() - 0.5) * 2 * (7 * Math.PI / 180));
+      ctx.fillText(WM_TEXT, 0, 0);
+      ctx.restore();
+    }
+  }
+  ctx.restore();
+}
+
 document.getElementById('btnExport').addEventListener('click', async () => {
   const btn = document.getElementById('btnExport');
   const label = btn.textContent;
@@ -260,6 +294,8 @@ document.getElementById('btnExport').addEventListener('click', async () => {
     for (let i = 0; i < total; i++) {
       btn.textContent = `生成中 ${i + 1}/${total}`;
       paintPage(ctx, i);
+      /* 封面（局内 / 局外各一张）不加水印，内容页才加 */
+      if (!(pagesCache[i] && pagesCache[i].cover)) drawWatermark(ctx, cv.width, cv.height);
       const blob = await new Promise(res => cv.toBlob(res, 'image/png'));
       if (dir) {
         btn.textContent = `写入中 ${i + 1}/${total}`;

@@ -5,7 +5,7 @@
 const ADJ_ALIAS_RE = /^(?:改动|修改)([前后])(?=[：:]|\s*$)/;
 function normAdjLabel(s) { return String(s || '').replace(ADJ_ALIAS_RE, '调整$1'); }
 
-function linesOf(p) {
+function linesOf(p, verbatim) {
   const raw = [];
   (function walk(node, bold) {
     for (const ch of node.childNodes) {
@@ -23,8 +23,12 @@ function linesOf(p) {
     const text = clean(segs.map(s => s.t).join(''));
     const bold = clean(segs.filter(s => s.b).map(s => s.t).join(''));
     /* 「改动前 / 改动后」和「调整前 / 调整后」是同一个意思：统一成后者，
-       后面的配对、压箭头、标金都只认一套写法 */
-    if (text) out.push({ text: normAdjLabel(text), bold: normAdjLabel(bold) });
+       后面的配对、压箭头、标金都只认一套写法。
+       局外章节照抄原文，保留原来的「改动前 / 修改前」不替换 */
+    if (text) out.push({
+      text: verbatim ? text : normAdjLabel(text),
+      bold: verbatim ? bold : normAdjLabel(bold)
+    });
     segs = [];
   };
   raw.forEach(x => { if (x.br) pushLine(); else segs.push(x); });
@@ -32,7 +36,7 @@ function linesOf(p) {
   return out;
 }
 
-const NOT_NAME_RE = /^(调整前|调整后|觉醒前|觉醒后|注|活动|兑换|祈愿|版本|更新)/;
+const NOT_NAME_RE = /^(调整前|调整后|觉醒前|觉醒后|改动前|改动后|修改前|修改后|注|活动|兑换|祈愿|版本|更新)/;
 /* 结构标签：「调整前 / 调整后 / 觉醒前 / 觉醒后」这类行只是上一条的对照正文，
    加粗了也不能当条目名，否则「调整后」的新内容会被拆成一张独立卡，上一条只剩旧值 */
 const STRUCT_LABEL_RE = /^(调整|觉醒|改动|修改)[前后](?:[：:]|$)/;

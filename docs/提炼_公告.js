@@ -219,7 +219,7 @@ function parseNotice(html) {
       return;
     }
     if (tag !== 'P') return;
-    let lines = linesOf(el);
+    let lines = linesOf(el, secRaw === 'plain');
     /* 有的公告整篇没有 H1/H2/H3，分类标题只是段落首行的整行加粗
        （「棋手调整 / 天赋调整 / 英雄调整…」）。整行加粗、够短、没有句末标点、
        以「调整 / 更新 / 修复 / 说明」收尾的首行按分组标题处理 */
@@ -289,6 +289,19 @@ function parseNotice(html) {
     if (isNewScope(lines[0])) { markNew = true; lines = lines.slice(1); }
     else if (isEndScope(lines[0])) { markNew = false; }
     if (!lines.length) return;
+
+    /* 局外：原文有时把「调整后 / 改动后 / 觉醒后」单独写成一个没有标题的段
+       （神机：改动前在上一条里，改动后另起一段）。它仍是上一条的对照内容，
+       原文照抄地接在上一条后面；拆成空标题卡会看不出一一对应 */
+    const afterM = !lines[0].bold && lines[0].text.match(/^(调整|觉醒|改动)后[：:]/);
+    if (secRaw === 'plain' && afterM && grp.items.length) {
+      const last = grp.items[grp.items.length - 1];
+      if (last && !last.table && new RegExp(afterM[1] + '前[：:]').test(String(last.d || ''))) {
+        last.d = String(last.d).replace(/\s+$/, '') + '\n' +
+          lines.map(l => String(l.text).trim()).filter(Boolean).join('\n');
+        return;
+      }
+    }
 
     pushItems(makeItems(lines, grp.name, chessScope(), false, markNew, guessNames, secRaw));
   });
