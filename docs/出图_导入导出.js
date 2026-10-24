@@ -532,14 +532,15 @@ async function localFillFromUrl() {
     setImportState('粘贴链接自动填充');
     return;
   }
-  /* 线上带 ?newsid= 打开时直接填这一篇；没带就等用户粘链接 */
+  /* 线上带 ?newsid= 打开时直接填这一篇；没带就自动抓最新一篇。
+     上面那行贴链接入口一直留着，想换一篇就粘进去覆盖 */
   const id = new URLSearchParams(location.search).get('newsid');
   if (id) {
     autoFill(async w => ({ data: await w.__wxq.autoNotice(id), title: '' }), '正在抓取公告并解析整篇…');
   } else {
-    const tip = document.getElementById('importTip1');
-    tip.className = '';
-    tip.textContent = '把公告链接（或编号）粘到上面那行，点「抓取并填充」，会自动抓取并解析整篇。';
-    setImportState('粘贴链接自动填充');
+    autoFill(async w => {
+      const r = await w.__wxq.autoLatest();
+      return { data: r.data, title: r.title };
+    }, '正在找最新一篇更新公告…');
   }
 })();
