@@ -5,7 +5,10 @@ async function fetchAndParse(id) {
   $('#btnFetch').disabled = true;
   try {
     const msg = await loadNews(id);
-    const sections = parseNotice(msg.sContent || '');
+    const html = msg.sContent || '';
+    const sections = parseNotice(html);
+    lastRawText = noticeRawText(html);
+    lastRawHtml = noticeRawHtml(html);
     const dm = String(msg.sTitle || msg.sDesc || '').match(/(\d{1,2})月(\d{1,2})日/);
     const meta = {
       date: dm ? (+dm[1]) + '.' + (+dm[2]) : '',
@@ -35,6 +38,8 @@ $('#btnParsePaste').onclick = () => {
   if (!raw) { setStatus('先粘贴公告内容', 'err'); return; }
   const html = raw.includes('<') ? raw : textToHtml(raw);
   const sections = parseNotice(html);
+  lastRawText = noticeRawText(html);
+  lastRawHtml = noticeRawHtml(html);
   const dm = raw.match(/(\d{1,2})月(\d{1,2})日/);
   const meta = {
     date: dm ? (+dm[1]) + '.' + (+dm[2]) : '',
@@ -102,6 +107,22 @@ async function autoLatest() {
   if (!it) throw new Error('没有取到公告列表');
   return { id: it.id, title: it.title, data: await autoNotice(it.id) };
 }
+
+/* 出图页在本地双击（file://）打开时读不到这边的 window（跨源），
+   改用消息一问一答：它把公告编号发过来，这里抓取解析后把整篇数据发回去 */
+window.addEventListener('message', async e => {
+  const d = e.data;
+  if (!d || d.type !== 'wxq-auto') return;
+  const back = payload => {
+    if (!e.source) return;
+    e.source.postMessage(Object.assign({ type: 'wxq-auto-result', req: d.req }, payload), '*');
+  };
+  try {
+    back({ ok: true, data: await autoNotice(d.id) });
+  } catch (err) {
+    back({ ok: false, error: (err && err.message) || String(err) });
+  }
+});
 
 /* 供自动化测试 / 后续合并调用 */
 window.__wxq = { loadNews, loadNewsList, pickLatest, parseNotice, textToHtml, fetchAndParse, collect, autoNotice, autoLatest };

@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -261,7 +261,6 @@
     border-radius: 10px; cursor: pointer;
   }
   .addBtn:hover { background: #21252e; border-color: #4d8bff; color: #b9cbff; }
-  #btnFoldAll { margin-top: 8px; }
   /* 排序视图：只留纯标题卡片，没有输入框，整张卡按住就能拖 */
   #sections.sort .secBox { margin-bottom: 8px; }
   #sections.sort .secBody { padding: 8px; }
@@ -283,6 +282,9 @@
   }
   .sortCnt { flex: none; font-size: 11px; color: #616b7f; }
   .sortLock { flex: none; font-size: 11px; }
+  /* 排序视图里的 ▲▼：长列表拖不动时点一下挪一格 */
+  .sortOps { flex: none; display: flex; gap: 2px; }
+  #sections.sort .sortOps .mv { width: 22px; height: 20px; font-size: 10px; }
 
   #importTip1 { margin-top: 8px; font-size: 11.5px; color: #616b7f; line-height: 1.6; }
   #importTip1.err { color: #ff8b8b; }
@@ -298,25 +300,118 @@
   #auditBox .auditItem:hover { color: #d8a94e; text-decoration: underline; }
   .itemRow.auditHit, .grpHead.auditHit { outline: 2px solid #d8a94e; outline-offset: 2px; border-radius: 8px; }
 
-  #panelFoot { padding: 14px 18px; border-top: 1px solid var(--line); display: flex; gap: 10px; }
+  /* ---- 状态条：平时一行，点开改封面 ---- */
+  #statusWrap { padding: 10px 18px; border-bottom: 1px solid var(--line); flex: none; }
+  #statusBar {
+    width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 10px; font-family: inherit; text-align: left;
+    color: var(--text); cursor: pointer;
+  }
+  #statusBar:hover { border-color: #46506b; }
+  #statusBar .stMain { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+  #statusBar b { font-size: 12.5px; font-weight: 700; }
+  #statusBar i { font-style: normal; font-size: 11px; color: var(--sub); }
+  .stCaret { flex: none; font-size: 11px; color: #616b7f; }
+  #statusBar.on .stCaret, #importFold.on .stCaret { transform: rotate(90deg); }
+  #coverBox { padding: 10px 0 0; display: flex; flex-direction: column; gap: 0; }
+  #coverBox[hidden] { display: none; }
+  .coverRow { display: flex; align-items: center; gap: 6px; }
+  .coverRow .coverLbl { flex: none; font-size: 11.5px; color: var(--sub); }
+  .coverRow input { flex: 1; padding: 6px 9px; font-size: 12.5px; }
+  #coverBox .dateRow select { padding: 6px 9px; font-size: 12.5px; }
+  #coverBox .seg button { padding: 6px 0; font-size: 12px; }
+
+  /* ---- 手动粘贴：折叠成一行 ---- */
+  .foldRow {
+    width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 11px; font-family: inherit; font-size: 12px; text-align: left;
+    color: var(--text); cursor: pointer;
+  }
+  .foldRow:hover { border-color: #46506b; }
+  .foldRow .foldMain { display: flex; align-items: baseline; gap: 6px; }
+  .foldRow i { font-style: normal; font-size: 11px; color: #616b7f; }
+  .foldRow.on { border-color: #3d4a63; }
+  #grpImport1 { padding-top: 8px; }
+  #grpImport1[hidden] { display: none; }
+  .label.topGap { margin-top: 16px; }
+
+  /* 本地双击打开时：粘公告链接，页面自己去抓 */
+  .urlRow { display: flex; gap: 8px; align-items: center; }
+  .urlRow[hidden] { display: none; }
+  .urlRow input { flex: 1; min-width: 0; }
+  .urlRow .addBtn { width: auto; flex: none; margin-top: 0; padding: 8px 14px; border-style: solid; }
+
+  /* 条目标题行（不再放「原文」按钮，原文统一在预览右侧常驻栏） */
+  .tRow { display: flex; gap: 6px; align-items: center; }
+  .tRow .it { flex: 1; min-width: 0; }
+
+  /* ============ 预览右侧的原文栏：一扇小窗，看公告原网页 ============ */
+  #srcPanel {
+    /* 屏幕窄的时候跟着缩，别把中间画布挤没了；要放得下网页排版所以比纯文本栏宽一些 */
+    width: clamp(300px, 27vw, 440px); min-width: 0; flex: none; height: 100vh;
+    background: var(--panel); border-left: 1px solid var(--line);
+    display: flex; flex-direction: column;
+  }
+  #srcPanelHead {
+    flex: none; padding: 13px 16px 11px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  #srcPanelHead b { font-size: 13px; font-weight: 700; }
+  #srcPanelHead span { font-size: 11px; color: var(--sub); margin-left: auto; }
+  #srcPanelBody { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 14px 26px; }
+  #srcPanelBody::-webkit-scrollbar { width: 8px; }
+  #srcPanelBody::-webkit-scrollbar-thumb { background: #333846; border-radius: 4px; }
+  /* 网页版：iframe 自己滚，四周留一点边像个小窗口 */
+  #srcPanelBody.hasFrame { padding: 10px 10px 12px; overflow: hidden; }
+  #srcFrame { display: block; width: 100%; height: 100%; border: 0; border-radius: 6px; background: #fff; }
+  /* 纯文本回退（旧 JSON 没有网页版原文时用） */
+  .srcAll {
+    margin: 0; padding: 4px 0 0;
+    font-family: inherit; font-size: 12px; line-height: 1.9;
+    color: #b6bdcc; white-space: pre-wrap; word-break: break-word;
+  }
+  .srcEmpty { font-size: 12px; line-height: 1.8; color: var(--sub); padding: 14px 4px; }
+
+  #panelFoot { padding: 14px 18px; border-top: 1px solid var(--line); display: flex; gap: 10px; position: relative; }
   #panelFoot button {
     flex: 1; padding: 12px;
     font-family: inherit; font-size: 13.5px; font-weight: 700;
     border-radius: 10px; cursor: pointer; border: none;
   }
-  #btnSample { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
-  #btnSample:hover { border-color: #46506b; }
-  #btnExport { background: linear-gradient(135deg, #4d8bff, #7b5cff); color: #fff; }
+  #btnExport { flex: 1; background: linear-gradient(135deg, #4d8bff, #7b5cff); color: #fff; }
   #btnExport:hover { filter: brightness(1.08); }
+
+  /* ---- 底栏弹出的选篇菜单 ---- */
+  .popMenu {
+    position: absolute; bottom: 62px; z-index: 20;
+    display: flex; flex-direction: column; gap: 6px;
+    background: var(--panel2); border: 1px solid #3a4152; border-radius: 10px;
+    padding: 8px; box-shadow: 0 14px 36px rgba(0,0,0,.5);
+  }
+  .popMenu[hidden] { display: none; }
+  #exportMenu { right: 18px; left: 18px; }
+  .popMenu button {
+    flex: none; padding: 9px 10px; text-align: left;
+    font-family: inherit; font-size: 12.5px; font-weight: 600;
+    color: var(--text); background: transparent; border: 1px solid transparent; border-radius: 7px;
+    cursor: pointer;
+  }
+  .popMenu button:hover { background: #2b3142; border-color: #3a4152; }
+  .popMenu button:first-child { color: #b9cbff; }
+  #exportMenu button[data-k=all] { color: var(--sub); font-weight: 500; }
+  .pmHead { font-size: 11px; color: var(--sub); padding: 2px 10px 6px; }
 
   /* ============ 右侧预览 ============ */
   #stage {
     flex: 1;
+    min-width: 0;
     height: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 44px 40px;
+    padding: 44px 28px;
     background:
       radial-gradient(circle at 30% 20%, #1d2130 0%, transparent 55%),
       radial-gradient(circle at 80% 85%, #1a1f2e 0%, transparent 55%),
@@ -400,7 +495,30 @@
         <button id="btnAudit" class="headBtn" type="button" hidden>质检</button>
       </div>
     </div>
-    <p>填内容 → 导出 1080×1920 PNG</p>
+  </div>
+
+  <!-- 状态条：日期和服务器由图 JSON 自动带出，平时只占一行；点开才展开封面与样式 -->
+  <div id="statusWrap">
+    <button id="statusBar" type="button">
+      <span class="stMain"><b id="statusText">— · —</b><i id="statusHint">点开改封面</i></span>
+      <span class="stCaret">▸</span>
+    </button>
+    <div id="coverBox" hidden>
+      <div class="field dateRow">
+        <select id="fMonth"></select><span class="unit">月</span>
+        <select id="fDay"></select><span class="unit">日</span>
+      </div>
+      <div class="field seg" id="fServer">
+        <button type="button" data-v="正式服" class="on">正式服</button>
+        <button type="button" data-v="体验服">体验服</button>
+      </div>
+      <div class="field coverRow">
+        <span class="coverLbl">正文字号</span>
+        <input type="number" id="fScale" min="20" max="300" step="1" value="66" />
+        <span class="unit">%</span>
+      </div>
+      <div class="field"><input type="text" id="fFoot" placeholder="底部署名 / 水印，可留空"></div>
+    </div>
   </div>
 
   <!-- 质检单独一块：固定在编辑区上方，点条目跳到正文时这一块不跟着滚 -->
@@ -411,61 +529,44 @@
 
   <div id="panelBody">
 
-    <div class="group">
-      <div class="label">标题 <span class="hint">选日期，自动拼「王者万象棋」</span></div>
-      <div class="field dateRow">
-        <select id="fMonth"></select><span class="unit">月</span>
-        <select id="fDay"></select><span class="unit">日</span>
-      </div>
-      <div class="label">副标题 <span class="hint">选择正式服 / 体验服</span></div>
-      <div class="field seg" id="fServer">
-        <button type="button" data-v="正式服" class="on">正式服</button>
-        <button type="button" data-v="体验服">体验服</button>
-      </div>
-      <div class="label">正文字号 <span class="hint">按百分比填，可随时改；放不下自动分页</span></div>
-      <div class="field" style="display:flex;align-items:center;gap:6px">
-        <input type="number" id="fScale" min="20" max="300" step="1" value="66" style="flex:1" />
-        <span style="font-size:12px;color:#6b7280">%</span>
-      </div>
-      <div class="label">底部署名 <span class="hint">账号名 / 水印，可留空</span></div>
-      <div class="field"><input type="text" id="fFoot"></div>
-      <div class="label">分篇出图 <span class="hint">只出当前标签这一篇（局内 / 局外各自一套，各带封面）；关掉则全部章节合成一篇</span></div>
-      <div class="field">
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#6b7280">
-          <input type="checkbox" id="fSplit" checked /> 启用分篇
-        </label>
-      </div>
+    <div class="field seg" id="fPart">
+      <button type="button" data-v="in" class="on">局内</button>
+      <button type="button" data-v="out">局外</button>
     </div>
 
-    <div class="group">
-      <div class="label">编辑范围 <span class="hint">局内 = 第一章（核心玩法），局外 = 其余章节；只影响下面显示哪一部分</span></div>
-      <div class="field seg" id="fPart">
-        <button type="button" data-v="in" class="on">局内</button>
-        <button type="button" data-v="out">局外</button>
-      </div>
+    <!-- 粘贴公告链接或编号，页面自己去抓（线上 / 本地双击都显示） -->
+    <div class="field urlRow" id="localUrlRow" hidden>
+      <input type="text" id="localUrl" placeholder="粘贴公告链接或编号，例如 18916493">
+      <button class="addBtn" id="btnLocalFetch" type="button">抓取并填充</button>
     </div>
 
-    <div class="group" id="grpImport1">
-      <div class="label">公告 JSON <span class="hint">粘贴「公告提炼 → 复制整篇 JSON」的内容</span></div>
+    <!-- 手动粘贴只在网址自动填充失效时才用得上，平时收成一行 -->
+    <button id="importFold" class="foldRow" type="button">
+      <span class="foldMain">公告 JSON<i id="importState">手动粘贴导入</i></span>
+      <span class="stCaret">▸</span>
+    </button>
+    <div id="grpImport1" hidden>
       <div class="field">
-        <textarea id="importBox1" rows="7" placeholder="在这里粘贴整篇 JSON（公告提炼里点「复制整篇 JSON」）：第一篇是第一章（局内），其余章节是局外原文。导入后整体替换，不会重复叠加。"></textarea>
+        <textarea id="importBox1" rows="6" placeholder="粘贴「公告提炼 → 复制整篇 JSON」的原样内容：第一篇是第一章（局内），其余章节是局外原文。导入后整体替换，不会重复叠加。"></textarea>
       </div>
       <button class="addBtn" id="btnImport1">导入整篇</button>
       <div id="importTip1"></div>
     </div>
 
-    <div class="group">
-      <div class="label">重点内容 <span class="hint">章节 → 分组 → 条目；拖卡片换位，或点「排序视图」只看标题、整张卡按住就拖（第一章固定第一位）</span></div>
-      <div id="sections"></div>
-      <button class="addBtn" id="btnAddSec">+ 添加章节</button>
-      <button class="addBtn" id="btnFoldAll">全部折叠</button>
-    </div>
+    <div class="label topGap">重点内容 <span class="hint">拖卡片换位，▲▼ 一格一格挪</span></div>
+    <div id="sections"></div>
 
   </div>
 
   <div id="panelFoot">
-    <button id="btnSample">载入示例</button>
-    <button id="btnExport">导出本篇 PNG</button>
+    <button id="btnExport">导出</button>
+
+    <div id="exportMenu" class="popMenu" hidden>
+      <div class="pmHead">导出哪一篇？</div>
+      <button type="button" data-k="in">局内平衡篇</button>
+      <button type="button" data-k="out">局外更新篇</button>
+      <button type="button" data-k="all">合并全部（不带篇名）</button>
+    </div>
   </div>
 </div>
 
@@ -483,14 +584,20 @@
   </div>
 </div>
 
-<script src="出图_基础.js"></script>
-<script src="出图_立绘.js"></script>
-<script src="出图_状态.js"></script>
-<script src="出图_排版.js"></script>
-<script src="出图_分页.js"></script>
-<script src="出图_交互.js"></script>
-<script src="出图_导入.js"></script>
-<script src="出图_数值表.js"></script>
-<script src="出图_导入导出.js"></script>
+<!-- 预览右侧的原文栏：整篇公告原文一次性铺在这里，不跟翻页、不按标题分组，自己上下滚 -->
+<aside id="srcPanel">
+  <div id="srcPanelHead"><b>公告原文</b><span id="srcPanelInfo"></span></div>
+  <div id="srcPanelBody"></div>
+</aside>
+
+<script src="出图_基础.js?v=20261025f"></script>
+<script src="出图_立绘.js?v=20261025f"></script>
+<script src="出图_状态.js?v=20261025f"></script>
+<script src="出图_排版.js?v=20261025f"></script>
+<script src="出图_分页.js?v=20261025f"></script>
+<script src="出图_交互.js?v=20261025f"></script>
+<script src="出图_导入.js?v=20261025f"></script>
+<script src="出图_数值表.js?v=20261025f"></script>
+<script src="出图_导入导出.js?v=20261025f"></script>
 </body>
 </html>

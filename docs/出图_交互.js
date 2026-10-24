@@ -4,7 +4,6 @@ const elMonth = document.getElementById('fMonth');
 const elDay = document.getElementById('fDay');
 const elServer = document.getElementById('fServer');
 const elFoot = document.getElementById('fFoot');
-const elSplit = document.getElementById('fSplit');
 const elSections = document.getElementById('sections');
 
 function esc(s) {
@@ -42,6 +41,10 @@ function buildEditor() {
            <span class="tag">章节${si === 0 ? 1 : si}</span>
            <span class="sortName">${esc(sec.name) || '（未命名章节）'}</span>
            <span class="sortCnt">${(sec.groups || []).length} 组</span>
+           <span class="sortOps">
+             <button class="mv" data-act="upSec" title="上移"${si <= 1 ? ' disabled' : ''}>▲</button>
+             <button class="mv" data-act="downSec" title="下移"${(si === 0 || si === state.sections.length - 1) ? ' disabled' : ''}>▼</button>
+           </span>
            ${lockSec ? '<span class="sortLock" title="第一章固定第一位">🔒</span>' : ''}
          </div>
          <div class="secBody"></div>`
@@ -70,6 +73,10 @@ function buildEditor() {
              <span class="tag">分组</span>
              <span class="sortName">${esc(grp.name) || '（未命名分组）'}</span>
              <span class="sortCnt">${(grp.items || []).length} 条</span>
+             <span class="sortOps">
+               <button class="mv" data-act="upGrp" title="上移"${gi === 0 ? ' disabled' : ''}>▲</button>
+               <button class="mv" data-act="downGrp" title="下移"${gi === (sec.groups || []).length - 1 ? ' disabled' : ''}>▼</button>
+             </span>
            </div>
            <div class="grpBody"></div>`
         : `
@@ -103,7 +110,11 @@ function buildEditor() {
           row.innerHTML = `
             <span class="sortNo">${ii + 1}</span>
             <span class="sortName"${!title && firstLine ? ` title="${esc(firstLine)}"` : ''}>${esc(shown)}</span>
-            ${kids.length ? `<span class="sortCnt">${kids.length} 技能</span>` : ''}`;
+            ${kids.length ? `<span class="sortCnt">${kids.length} 技能</span>` : ''}
+            <span class="sortOps">
+              <button class="mv" data-act="upItem" title="上移"${ii === 0 ? ' disabled' : ''}>▲</button>
+              <button class="mv" data-act="downItem" title="下移"${ii === (grp.items || []).length - 1 ? ' disabled' : ''}>▼</button>
+            </span>`;
           gbody.appendChild(row);
           return;
         }
@@ -130,7 +141,7 @@ function buildEditor() {
           </div>
           <button class="del" data-act="delItem" title="删除">✕</button>
           <div class="inner">
-            <div class="field"><input type="text" class="it" placeholder="小标题，如：庄小鱼" value="${esc(it.t)}"></div>
+            <div class="field tRow"><input type="text" class="it" placeholder="小标题，如：庄小鱼" value="${esc(it.t)}"></div>
             ${it.table
               ? `<div class="field"><textarea class="itbl" rows="${Math.max(3, (it.table.rows || []).length + 1)}" placeholder="每行：名称 | 调整前 | 调整后">${esc((it.table.rows || []).map(r => r.join(' | ')).join('\n'))}</textarea></div>`
               : `<div class="field"><textarea class="id" rows="2" placeholder="一句话说明（Enter 换行）">${esc(it.d)}</textarea></div>`}
@@ -159,12 +170,6 @@ function buildEditor() {
 
   elSections.querySelectorAll('textarea').forEach(autoGrow);
 
-  const fa = document.getElementById('btnFoldAll');
-  if (fa) {
-    const allFolded = state.sections.length > 0 && state.sections.every(s => folded.has(s));
-    fa.textContent = allFolded ? '全部展开' : '全部折叠';
-  }
-
   applyPartFilter();
 }
 
@@ -176,13 +181,11 @@ function applyPartFilter() {
   syncPartUI();
 }
 
-/* 编辑侧标签：「+ 添加章节」只在局外显示（第一章固定第一位） */
+/* 编辑侧标签：局内 = 第一章，局外 = 其余章节 */
 function syncPartUI() {
-  const inner = state.part === 'in';
   document.querySelectorAll('#fPart button').forEach(b => {
     b.classList.toggle('on', b.dataset.v === state.part);
   });
-  document.getElementById('btnAddSec').style.display = (inner || sortMode) ? 'none' : '';
 }
 
 document.getElementById('fPart').addEventListener('click', e => {
@@ -309,6 +312,23 @@ elSections.addEventListener('click', e => {
 
   buildEditor(); render();
 
+  /* 排序视图里点 ▲▼ 后，把挪动后的卡片滚进视野（长列表里不会跟丢） */
+  if (sortMode && /^(up|down)(Sec|Grp|Item)$/.test(act)) {
+    const d = act.indexOf('up') === 0 ? -1 : 1;
+    let node = elSections.children[si];
+    if (act.endsWith('Sec')) node = elSections.children[si + d];
+    else if (node) {
+      const gs = node.querySelectorAll(':scope > .secBody > .grpBox');
+      let g = gs[gi];
+      if (act.endsWith('Grp')) g = gs[gi + d];
+      if (g) node = act.endsWith('Item')
+        ? g.querySelectorAll(':scope > .grpBody > .itemRow')[ii + d]
+        : g;
+      else node = null;
+    }
+    if (node) node.scrollIntoView({ block: 'nearest' });
+  }
+
   if (act === 'addGrp') {
     const gs = elSections.children[si].querySelectorAll('.secBody > .grpBox');
     const gb = gs[gs.length - 1];
@@ -428,36 +448,18 @@ elSections.addEventListener('mousedown', e => {
   document.addEventListener('mouseup', onDragUp);
 });
 
-document.getElementById('btnFoldAll').addEventListener('click', () => {
-  const allFolded = state.sections.length > 0 && state.sections.every(s => folded.has(s));
-  state.sections.forEach(s => { if (allFolded) folded.delete(s); else folded.add(s); });
-  buildEditor(); render();
-});
-
 /* 排序视图：纯标题卡片，整张卡按住就能拖；再点一次回编辑视图 */
 const btnSort = document.getElementById('btnSort');
 btnSort.addEventListener('click', () => {
   sortMode = !sortMode;
   btnSort.textContent = sortMode ? '退出排序' : '排序视图';
   btnSort.classList.toggle('on', sortMode);
-  document.getElementById('btnFoldAll').style.display = sortMode ? 'none' : '';
   buildEditor();
-});
-
-document.getElementById('btnAddSec').addEventListener('click', () => {
-  /* 第一章固定占第一位：列表还是空的时候先补一个空占位，
-     否则新章节会落到第一位、被当成局内，在局外标签下反而看不见 */
-  if (!state.sections.length) state.sections.push({ name: '一、核心玩法更新', groups: [] });
-  state.sections.push({ name: '', groups: [{ name: '', items: [{ t: '', d: '' }] }] });
-  buildEditor(); render();
-  const boxes = elSections.querySelectorAll('.secBox');
-  const last = boxes[boxes.length - 1];
-  last.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  last.querySelector('.secName').focus();
 });
 
 function setServerUI() {
   elServer.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === state.server));
+  updateStatus();
 }
 
 const DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -488,7 +490,120 @@ function setDateUI() {
   elMonth.value = m >= 1 && m <= 12 ? m : 1;
   fillDays();
   elDay.value = d >= 1 && d <= elDay.options.length ? d : 1;
+  updateStatus();
 }
+
+/* 状态条只显示「日期 · 服务器」，点开才露出封面与样式 */
+function updateStatus() {
+  const t = document.getElementById('statusText');
+  if (t) t.textContent = (state.date || '未定日期') + ' · ' + (state.server || '未选服务器');
+}
+
+const elStatusBar = document.getElementById('statusBar');
+const elCoverBox = document.getElementById('coverBox');
+elStatusBar.addEventListener('click', () => {
+  elCoverBox.hidden = !elCoverBox.hidden;
+  elStatusBar.classList.toggle('on', !elCoverBox.hidden);
+});
+
+/* 手动粘贴：默认收成一行，点开才占版面 */
+const elImportFold = document.getElementById('importFold');
+const elImportWrap = document.getElementById('grpImport1');
+elImportFold.addEventListener('click', () => {
+  elImportWrap.hidden = !elImportWrap.hidden;
+  elImportFold.classList.toggle('on', !elImportWrap.hidden);
+});
+function setImportState(text) {
+  const el = document.getElementById('importState');
+  if (!el) return;
+  el.textContent = text;
+}
+function closeImportFold() {
+  elImportWrap.hidden = true;
+  elImportFold.classList.remove('on');
+}
+function openImportFold() {
+  elImportWrap.hidden = false;
+  elImportFold.classList.add('on');
+}
+
+/* =======================  预览右侧的原文栏  ======================= */
+/* 整篇公告原文：右侧就是一扇小窗，直接把公告正文的网页渲染出来（加粗/分段/图片都在），
+   不按章节/分组/条目标题切，也不跟翻页联动：自己上下滚，想核哪句就滚到哪句。
+   数据来自提炼端抓取时整篇存下的 rawHtml；旧 JSON 没有这块时退回纯文本 rawText，
+   再退回把各条原句按顺序接起来（不加标题） */
+const elSrcBody = document.getElementById('srcPanelBody');
+const elSrcInfo = document.getElementById('srcPanelInfo');
+
+/* 小窗里的页面：就是官网正文那一块——套上官网自己的样式表（字体/字色/段距/图片居中都跟原网页一致），
+   只把整站定宽（.artdetailcontent 1420px / .art_l_conent 1000px）改成随栏宽自适应 */
+function srcFrameDoc(html) {
+  return '<!doctype html><html><head><meta charset="utf-8">'
+    + '<link rel="stylesheet" href="https://game.gtimg.cn/images/yxzj/web201706/css/comm-v1.css">'
+    + '<link rel="stylesheet" href="https://game.gtimg.cn/images/yxzj/web201706/css/artlist.css">'
+    + '<style>'
+    /* 官网基础排版：14px/1.5 微软雅黑、正文色 #323235 */
+    + 'html,body{margin:0;padding:0;background:#fff;color:#323235;'
+    + 'font:14px/1.5 "Microsoft YaHei",Tahoma,"simsun",sans-serif;}'
+    + 'body{padding:0;}'
+    /* 只截正文：去掉官网整站的定宽、浮动和页边留白，窄栏里自适应 */
+    + '.artdetailcontent{width:auto!important;padding:0!important;margin:0!important;}'
+    + '.art_l_conent{width:auto!important;float:none!important;overflow:visible!important;'
+    + 'padding:16px 16px 34px!important;box-sizing:border-box;}'
+    + '.art_dmain{width:auto!important;padding:0!important;margin:0!important;}'
+    + '.art_dmain p{margin:0 0 8px;}'
+    + '.art_dmain img{max-width:100%!important;height:auto!important;margin:0 auto;}'
+    + 'img{max-width:100%!important;height:auto!important;}'
+    + 'table{max-width:100%!important;}td,th{word-break:break-word;}'
+    + '::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:#ccd0d8;border-radius:4px}'
+    + '</style></head><body>'
+    + '<div class="artdetailcontent"><div class="art_l_conent">'
+    + '<div class="art_dmain" id="pageDetail">' + html + '</div>'
+    + '</div></div></body></html>';
+}
+
+function updateSrcPanel() {
+  if (!elSrcBody) return;
+  const html = String(state.rawHtml || '').trim();
+  if (html) {
+    elSrcBody.classList.add('hasFrame');
+    elSrcBody.innerHTML = '';
+    const f = document.createElement('iframe');
+    f.id = 'srcFrame';
+    /* 不给脚本权限：公告 HTML 里的脚本、事件都跑不起来，只当静态页面看 */
+    f.setAttribute('sandbox', '');
+    f.srcdoc = srcFrameDoc(html);
+    elSrcBody.appendChild(f);
+    if (elSrcInfo) elSrcInfo.textContent = '原网页';
+    return;
+  }
+  elSrcBody.classList.remove('hasFrame');
+  let text = String(state.rawText || '').trim();
+  if (!text) {
+    const out = [];
+    (state.sections || []).forEach(sec => (sec.groups || []).forEach(g => (g.items || []).forEach(it => {
+      const s = String(it.src || '').trim();
+      if (s) out.push(s);
+    })));
+    text = out.join('\n');
+  }
+  if (!text) {
+    elSrcBody.innerHTML = '<div class="srcEmpty">还没有原文。导入整篇 JSON、或按公告编号自动填充后，这里会显示整篇公告原文。</div>';
+    if (elSrcInfo) elSrcInfo.textContent = '';
+    return;
+  }
+  elSrcBody.innerHTML = `<pre class="srcAll">${esc(text)}</pre>`;
+  if (elSrcInfo) elSrcInfo.textContent = '整篇 · ' + text.split('\n').length + ' 行';
+}
+
+/* 底栏的选篇弹窗 */
+const elExportMenu = document.getElementById('exportMenu');
+function closeMenus() {
+  elExportMenu.hidden = true;
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('#panelFoot')) closeMenus();
+});
 
 function syncDate() {
   state.date = `${+elMonth.value}.${+elDay.value}`;
@@ -504,7 +619,6 @@ elServer.addEventListener('click', e => {
   setServerUI(); syncTitles(); render();
 });
 elFoot.addEventListener('input', e => { state.foot = e.target.value; scheduleRender(); });
-elSplit.addEventListener('change', e => { state.split = e.target.checked; pageIdx = 0; render(); });
 
 const elScale = document.getElementById('fScale');
 elScale.value = String(Math.round(fixedScale * 100));
@@ -540,17 +654,25 @@ function parseJSONSections(text) {
       (g.items || []).forEach(it => {
         const t = String(it.t == null ? '' : it.t).trim();
         const d = String(it.d == null ? '' : it.d).trim();
+        /* 原句（提炼页带出来的）整条保留，出图页的「原文」按钮要用 */
+        const src = String(it.src == null ? '' : it.src).trim();
         /* 已是「棋手 + 技能子条目」结构时原样保留，一个棋手可挂多个技能 */
         const kids = Array.isArray(it.kids) ? it.kids
-          .map(k => ({ t: String(k.t == null ? '' : k.t).trim(), d: String(k.d == null ? '' : k.d).trim() }))
+          .map(k => {
+            const kt = String(k.t == null ? '' : k.t).trim();
+            const kd = String(k.d == null ? '' : k.d).trim();
+            const ks = String(k.src == null ? '' : k.src).trim();
+            return ks ? { t: kt, d: kd, src: ks } : { t: kt, d: kd };
+          })
           .filter(k => k.t || k.d) : [];
         if (!t && !d && !kids.length) return;
-        if (kids.length) items.push({ t, d, kids });
+        const base = src ? { t, d, src } : { t, d };
+        if (kids.length) items.push(Object.assign(base, { kids }));
         /* 三级标签只画胶囊，说明另起一条，避免导入时把描述丢掉 */
         else if (it.sub && t) {
           items.push({ t, d: '', sub: true });
           if (d) items.push({ t: '', d });
-        } else items.push({ t, d });
+        } else items.push(base);
       });
       if (items.length) groups.push({ name: String(g.name || '').trim(), items });
     });

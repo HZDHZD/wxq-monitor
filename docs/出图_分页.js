@@ -583,6 +583,7 @@ function render() {
 
   syncPager();
   fitPreview();
+  updateSrcPanel();     /* 右侧原文栏：整篇原文，只在内容变化时刷新，不跟翻页 */
 }
 
 function syncPager() {

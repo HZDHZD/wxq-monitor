@@ -7,6 +7,14 @@ const DIGEST_ATTR = /^(初始法力值|初始生命值|能量消耗|法力值|�
 /* 原文没有的空标签行 */
 const DIGEST_EMPTY_LABEL = /^(活动说明|说明|规则|备注)[：:]?$/;
 
+/* 原句对照：同一条目合并时，原句也一起接上 */
+function mergeSrc(prev, raw) {
+  if (!prev || !raw || !raw.src) return;
+  const a = String(prev.src || '').trim(), b = String(raw.src || '').trim();
+  if (!b || a === b || a.includes(b)) return;
+  prev.src = a ? a + '\n' + b : b;
+}
+
 /* 只变数字的箭头若名词写了两遍，压缩成「名词 旧 → 新」 */
 function normArrowDup(s) {
   return String(s).replace(
@@ -184,9 +192,9 @@ function buildChessItems(items, grpName) {
     if (!Array.isArray(it.kids)) it.kids = [];
     return it.kids;
   };
-  const addKid = (parent, t, d) => {
+  const addKid = (parent, t, d, src) => {
     const kt = String(t || '').trim(), kd = String(d || '').trim();
-    if (kt) ensureKids(parent).push({ t: kt, d: kd });
+    if (kt) ensureKids(parent).push(src ? { t: kt, d: kd, src } : { t: kt, d: kd });
     else if (kd) {
       /* 无标题续段属于紧挨着的上一个技能，接在它正文后面；
          跑到父条目正文里会排到所有技能之前，顺序就乱了 */
@@ -198,6 +206,7 @@ function buildChessItems(items, grpName) {
         parent.d = [String(parent.d || '').trim(), kd].filter(Boolean).join('\n');
       }
     }
+    if (src) mergeSrc(parent, { src });
   };
 
   for (let i = 0; i < items.length; i++) {
@@ -206,7 +215,7 @@ function buildChessItems(items, grpName) {
 
     /* ①「◆ 庄小鱼」+ 后续若干条技能：全部收进同一个父条目的 kids */
     if (it.sub && isChessName(t)) {
-      const parent = { t, d: '', kids: [] };
+      const parent = { t, d: '', src: it.src || '', kids: [] };
       let j = i + 1;
       for (; j < items.length; j++) {
         const nx = items[j];
@@ -222,12 +231,12 @@ function buildChessItems(items, grpName) {
         }
         /* 下一位棋手留给外层，不能吞进当前棋手 */
         if (nt && isChessName(nt) && nt !== t) break;
-        if (nt && nt !== t) addKid(parent, nt, nx.d || '');
+        if (nt && nt !== t) addKid(parent, nt, nx.d || '', nx.src);
         else {
           /* 无标题、或重复了一遍棋手名：技能名在正文首行「XX：…」里 */
           const lead = splitLeadName(t, nx.d || '');
-          if (lead) addKid(parent, lead.name, lead.rest);
-          else addKid(parent, '', nx.d || '');
+          if (lead) addKid(parent, lead.name, lead.rest, nx.src);
+          else addKid(parent, '', nx.d || '', nx.src);
         }
       }
       /* 同一棋手被拆成多个 ◆：并到上一条，避免出现两张同名卡 */
@@ -235,6 +244,7 @@ function buildChessItems(items, grpName) {
       if (last && String(last.t || '').trim() === t && Array.isArray(last.kids)) {
         last.kids.push(...parent.kids);
         last.d = [String(last.d || '').trim(), parent.d].filter(Boolean).join('\n');
+        mergeSrc(last, parent);
       } else out.push(parent);
       i = j - 1;
       continue;
@@ -259,12 +269,12 @@ function buildChessItems(items, grpName) {
         if (nt && isRuleTitle(nt)) break;
         if (!nt && isRuleTitle(String(nx.d || '').split('\n')[0].trim())) break;
         if (nt && isChessName(nt) && nt !== t) break;
-        if (nt === t) { addKid(parent, '', nx.d || ''); continue; }
-        if (nt) addKid(parent, nt, nx.d || '');
+        if (nt === t) { addKid(parent, '', nx.d || '', nx.src); continue; }
+        if (nt) addKid(parent, nt, nx.d || '', nx.src);
         else {
           const lead = splitLeadName(t, nx.d || '');
-          if (lead) addKid(parent, lead.name, lead.rest);
-          else addKid(parent, '', nx.d || '');
+          if (lead) addKid(parent, lead.name, lead.rest, nx.src);
+          else addKid(parent, '', nx.d || '', nx.src);
         }
       }
       if (!parent.d && !parent.kids.length) { out.push(it); continue; }
@@ -285,13 +295,14 @@ function buildChessItems(items, grpName) {
       if (cs) {
         const prevCs = out[out.length - 1];
         if (prevCs && String(prevCs.t || '').trim() === cs.who && Array.isArray(prevCs.kids)) {
-          addKid(prevCs, cs.skill, it.d || '');
+          addKid(prevCs, cs.skill, it.d || '', it.src);
         } else {
           out.push(Object.assign({}, it, {
             t: cs.who,
             d: '',
             /* 标题里的技能排最前，已带的技能（JSON 导入）原样保留在后面 */
-            kids: [{ t: cs.skill, d: String(it.d || '').trim() }]
+            kids: [it.src ? { t: cs.skill, d: String(it.d || '').trim(), src: it.src }
+              : { t: cs.skill, d: String(it.d || '').trim() }]
               .concat(Array.isArray(it.kids) ? it.kids : [])
           }));
         }
@@ -306,7 +317,7 @@ function buildChessItems(items, grpName) {
         /* 同一个棋手又出现一条（第二个技能）→ 挂进上一条的 kids，不另起一张卡 */
         const last = out[out.length - 1];
         if (last && Array.isArray(last.kids) && String(last.t || '').trim() === t) {
-          addKid(last, lead.name, lead.rest);
+          addKid(last, lead.name, lead.rest, it.src);
         } else {
           out.push(Object.assign({}, it, {
             t,
@@ -324,8 +335,8 @@ function buildChessItems(items, grpName) {
     const prev = out[out.length - 1];
     if (!it.sub && t && prev && isChessName(t) && String(prev.t || '').trim() === t && !it.table) {
       const lead = String(it.d || '').trim() ? splitLeadName(t, it.d) : null;
-      if (lead) addKid(prev, lead.name, lead.rest);
-      else if (String(it.d || '').trim()) addKid(prev, '', it.d);
+      if (lead) addKid(prev, lead.name, lead.rest, it.src);
+      else if (String(it.d || '').trim()) addKid(prev, '', it.d, it.src);
       continue;
     }
 
@@ -335,7 +346,9 @@ function buildChessItems(items, grpName) {
     if (!it.sub && !t && owner && isChessName(owner.t) && !it.table) {
       const head = String(it.d || '').split('\n')[0].trim();
       if (!isRuleTitle(head)) {
-        ensureKids(owner).push({ t: '', d: String(it.d || '').trim() });
+        ensureKids(owner).push(it.src ? { t: '', d: String(it.d || '').trim(), src: it.src }
+          : { t: '', d: String(it.d || '').trim() });
+        mergeSrc(owner, it);
         continue;
       }
     }
@@ -362,7 +375,7 @@ function buildChessItems(items, grpName) {
         out.push(Object.assign({}, it, { t: sc[1].trim() + ' · ' + t }));
         continue;
       }
-      if (isChessName(own.t)) { addKid(own, t, it.d || ''); continue; }
+      if (isChessName(own.t)) { addKid(own, t, it.d || '', it.src); continue; }
     }
 
     out.push(it);
@@ -548,6 +561,7 @@ function normalizeSections(sections) {
         } else if (!sub && t && prev && !prev.sub && String(prev.t || '').trim() === t && d && !isChessName(t)) {
           /* 同名条目合并正文；棋手同名条目交给 buildChessItems 拆成多个技能 */
           prev.d = [String(prev.d || '').trim(), d].filter(Boolean).join('\n');
+          mergeSrc(prev, raw);
         } else if (t || d) {
           const item = Object.assign({}, raw, { t, d });
           if (sub) item.sub = true;

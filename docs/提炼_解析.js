@@ -24,10 +24,12 @@ function linesOf(p, verbatim) {
     const bold = clean(segs.filter(s => s.b).map(s => s.t).join(''));
     /* 「改动前 / 改动后」和「调整前 / 调整后」是同一个意思：统一成后者，
        后面的配对、压箭头、标金都只认一套写法。
-       局外章节照抄原文，保留原来的「改动前 / 修改前」不替换 */
+       局外章节照抄原文，保留原来的「改动前 / 修改前」不替换。
+       raw 留着归一化之前的原话，只给「原文」栏用：解析用 text，展示用 raw */
     if (text) out.push({
       text: verbatim ? text : normAdjLabel(text),
-      bold: verbatim ? bold : normAdjLabel(bold)
+      bold: verbatim ? bold : normAdjLabel(bold),
+      raw: text
     });
     segs = [];
   };

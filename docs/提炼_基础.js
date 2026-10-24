@@ -27,6 +27,79 @@ function clean(s) {
     .trim();
 }
 
+/* 原句对照：条目后来又并进新的原文块时，把原句一起接上，
+   出图页点「原文」能看到整条覆盖的全部句子 */
+function addSrc(item, text) {
+  if (!item || !text) return;
+  const a = String(item.src || '').trim(), b = String(text || '').trim();
+  if (!b || a === b) return;
+  item.src = a ? a + '\n' + b : b;
+}
+
+/* 整篇原文：只按网页里的段落 / 换行拆成纯文本行，不做任何结构判断、不带标题分类。
+   出图页右侧「原文」栏整段显示用，用户自己上下滚 */
+let lastRawText = '';
+
+function noticeRawText(html) {
+  const host = document.createElement('div');
+  host.innerHTML = html || '';
+  const out = [];
+  (function walk(node) {
+    Array.from(node.childNodes).forEach(ch => {
+      if (ch.nodeType === 3) {
+        /* 只压空格、去图标乱码；句内空格保留（相邻标签之间的空格丢了会粘字） */
+        const s = String(ch.nodeValue).replace(/[\uE000-\uF8FF\uFFFD]/g, '').replace(/\s+/g, ' ');
+        if (s) out.push(s);
+      } else if (ch.nodeName === 'BR') {
+        out.push('\n');
+      } else if (ch.nodeName === 'IMG') {
+        /* 图片忽略 */
+      } else {
+        walk(ch);
+        if (/^(P|DIV|SECTION|ARTICLE|MAIN|BLOCKQUOTE|H1|H2|H3|H4|LI|TR)$/.test(ch.nodeName)) out.push('\n');
+      }
+    });
+  })(host);
+  return out.join('').replace(/\n{3,}/g, '\n\n')
+    .split('\n').map(s => clean(s)).filter(Boolean).join('\n');
+}
+
+/* 整篇原文的网页版：出图页右侧就是一个小窗，直接把公告正文的 HTML 渲染出来，
+   加粗、分段、图片都还在，看着和原网页一样。
+   只做必要的清理：去脚本/样式表、图片地址转绝对、表格图片限宽。
+   BASE 用官网域名兜底，公告里的「//ossweb-img.qq.com/…」也能拼成 https */
+const RAW_HTML_BASE = 'https://pvp.qq.com/';
+let lastRawHtml = '';
+
+function noticeRawHtml(html) {
+  const host = document.createElement('div');
+  host.innerHTML = html || '';
+  host.querySelectorAll('script, style, link, meta, iframe, noscript').forEach(el => el.remove());
+  Array.from(host.querySelectorAll('*')).forEach(el => {
+    Array.from(el.attributes).forEach(a => {
+      if (/^on/i.test(a.name)) el.removeAttribute(a.name);
+      else if (a.name === 'style' && /display\s*:\s*none/i.test(a.value)) el.removeAttribute(a.name);
+    });
+  });
+  host.querySelectorAll('img').forEach(img => {
+    let src = (img.getAttribute('src') || '').trim();
+    if (src) {
+      if (src.indexOf('//') === 0) src = 'https:' + src;
+      else if (src[0] === '/') src = RAW_HTML_BASE.replace(/\/$/, '') + src;
+      else if (!/^(https?:|data:)/i.test(src)) {
+        try { src = new URL(src, RAW_HTML_BASE).href; } catch (_) { /* 拼不出来就原样 */ }
+      }
+      img.setAttribute('src', src);
+    }
+    img.removeAttribute('width');
+    img.removeAttribute('height');
+  });
+  host.querySelectorAll('table').forEach(t => {
+    t.removeAttribute('width');
+  });
+  return host.innerHTML;
+}
+
 function setStatus(msg, type) {
   const el = $('#status');
   el.textContent = msg || '';

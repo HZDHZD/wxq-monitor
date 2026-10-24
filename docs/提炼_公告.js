@@ -62,19 +62,23 @@ function parseNotice(html) {
 
   /* 原文常把「调整前 / 调整后」拆成两个段落，先攒齐整组，再交给 buildDesc 配对 */
   let adjLines = null;
+  /* 与 adjLines 一一对应的原话（归一化之前），只给「原文」栏用 */
+  let adjSrc = null;
   /* 标题段里就地切开时（「毒奶 / 降低…伤害。 / 调整前：…」），后面的数值
      属于刚生成的这条标题，不能另起一张无标题卡 */
   let adjOwner = false;
   const flushAdj = () => {
-    if (!adjLines || !adjLines.length) { adjLines = null; adjOwner = false; return; }
+    if (!adjLines || !adjLines.length) { adjLines = null; adjSrc = null; adjOwner = false; return; }
     const blk = adjLines;
     const d = buildDesc(blk, secRaw);
     adjLines = null;
     const own = adjOwner;
     adjOwner = false;
-    if (!grp || !d) return;
+    if (!grp || !d) { adjSrc = null; return; }
     const last = grp.items[grp.items.length - 1];
-    if (last && last.t && !last.d && !last.sub) last.d = d;
+    const blkSrc = (adjSrc || blk).join('\n');
+    adjSrc = null;
+    if (last && last.t && !last.d && !last.sub) { last.d = d; addSrc(last, blkSrc); }
     /* 「调整后」单独成段、前一段是同一个条目的「调整前」：并回去重压箭头，
        否则两版会拆成两张卡，数值也压不成箭头（神机） */
     else if (last && last.t && !last.sub && last._raw && /^调整后/.test(blk[0])
@@ -83,9 +87,11 @@ function parseNotice(html) {
       last.d = buildDesc(raw, secRaw) || d;
       last._raw = raw;
       last._cont = false;
+      addSrc(last, blkSrc);
     }
     else if (own && last && last.t && !last.sub) {
       last.d = last.d ? last.d.replace(/\s+$/, '') + '\n' + d : d;
+      addSrc(last, blkSrc);
     }
     /* 上一段以「…做如下调整：」收尾时，调整前/后就是它的续写，不能另起一张无标题卡 */
     else if (last && !last.sub && last._cont) {
@@ -94,8 +100,9 @@ function parseNotice(html) {
          单句续写仍接在原句后面 */
       last.d = /\n/.test(d) ? base + (/[：:]$/.test(base) ? '\n' : '：\n') + d : base + '。' + d;
       last._cont = false;
+      addSrc(last, blkSrc);
     }
-    else grp.items.push({ t: '', d });
+    else grp.items.push(blkSrc ? { t: '', d, src: blkSrc } : { t: '', d });
   };
 
   /* 统一入库：补充行挂回所属英雄，并处理「新增：」作用域 */
@@ -115,6 +122,7 @@ function parseNotice(html) {
           && (TIER_LABEL_RE.test(t) || ATTR_ADJ_LABEL_RE.test(t))) {
           const line = t + (it.d ? '：' + it.d : '');
           lastHeroItem.d = lastHeroItem.d ? lastHeroItem.d + '\n' + line : line;
+          addSrc(lastHeroItem, it.src || line);
           return;
         }
       }
@@ -123,6 +131,7 @@ function parseNotice(html) {
       if (!it.t && it.d && lastHeroItem && grp.items[grp.items.length - 1] === lastHeroItem
         && /^([0-9]{1,3}级(?:技能|被动|普攻|主动|大招|奥义|效果|伤害)?|基础技能|被动技能|主动技能|技能|[^：:]{0,10}(攻击速度|攻击力|生命值|法力值|护盾|技能范围|冷却|消耗|能量|物理防御|法术防御|伤害)(?:调整|优化)?)[：:]/.test(String(it.d).trim())) {
         lastHeroItem.d = (lastHeroItem.d ? lastHeroItem.d + '\n' : '') + String(it.d).trim();
+        addSrc(lastHeroItem, it.src || String(it.d).trim());
         lastHeroItem._cont = false;
         return;
       }
@@ -134,6 +143,7 @@ function parseNotice(html) {
           prev.d = String(it.d);
           prev._raw = prev._raw || [];
           prev._cont = !!it._cont;
+          addSrc(prev, it.src || String(it.d));
           return;
         }
       }
@@ -157,6 +167,7 @@ function parseNotice(html) {
             prev.d = colonTail
               ? String(prev.d).replace(/\s+$/, '') + add
               : String(prev.d).replace(/[。；;]\s*$/, '') + sep + add;
+            addSrc(prev, it.src || add);
             /* 续段本身仍以冒号收尾时继续等待下一段 */
             prev._cont = /[：:]\s*$/.test(add);
             return;
@@ -271,6 +282,7 @@ function parseNotice(html) {
        局外章节原样照抄，不做配对 */
     if (secRaw !== 'plain' && /^调整[前后]/.test(lines[0].text)) {
       adjLines = (adjLines || []).concat(lines.map(l => l.text));
+      adjSrc = (adjSrc || []).concat(lines.map(l => l.raw || l.text));
       return;
     }
     flushAdj();
@@ -281,6 +293,7 @@ function parseNotice(html) {
     if (markIdx > 0) {
       pushItems(makeItems(lines.slice(0, markIdx), grp.name, chessScope(), false, markNew, guessNames, secRaw));
       adjLines = lines.slice(markIdx).map(l => l.text);
+      adjSrc = lines.slice(markIdx).map(l => l.raw || l.text);
       adjOwner = true;
       return;
     }

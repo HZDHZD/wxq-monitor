@@ -34,9 +34,12 @@ function tableColumnName(sec, grp) {
 }
 
 function makeValueTable(sec, grp, run) {
+  /* 并成表格的几条原句一起带上，点「原文」能对照整张表 */
+  const srcs = run.rows.map(r => String(r.it.src || '').trim()).filter(Boolean);
   return {
     t: /调整$/.test(run.attr) ? run.attr : run.attr + '调整',
     d: '',
+    ...(srcs.length ? { src: srcs.join('\n') } : {}),
     table: {
       head: [tableColumnName(sec, grp), '调整前', '调整后'],
       rows: run.rows.map(r => [r.name, r.a, r.b])

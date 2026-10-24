@@ -12,7 +12,7 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
         out.push({ t, d: '', sub: true });
         return;
       }
-      if (!out.length || FIX_VERB_RE.test(t)) out.push({ t: '', d: t });
+      if (!out.length || FIX_VERB_RE.test(t)) out.push({ t: '', d: t, src: l.raw || t });
       else {
         /* 上一行已经是一句完整的话（以句号结尾）而这一行也独立成句时补分号，
            避免两条修复粘成一句；真正的 <br> 续行（两侧都无句末标点）仍然直接拼 */
@@ -20,6 +20,7 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
         const cont = /^[的着了过并且或与及和、，,）)】」…—]/.test(t) || /[（(【「]$/.test(prevD);
         const sep = (!cont && !/[。！？；;]$/.test(prevD) && /[。！？；;]$/.test(t)) ? '；' : '';
         out[out.length - 1].d = prevD + sep + t;
+        addSrc(out[out.length - 1], l.raw || t);
       }
     });
     return out;
@@ -66,14 +67,18 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
     }
     if (!forcedStart && !startAt(i)) {
       if (!items.length) {
-        items.push({ t: '', d: '', _lines: [lines[i].text] });
+        items.push({ t: '', d: '', _lines: [lines[i].text], _srcLines: [lines[i].raw || lines[i].text] });
       } else {
         const cur = items[items.length - 1];
         /* 平铺公告的续行直接归到上一条正文，不做「无标题条目」拆分 */
-        if (flat) (cur._extra = cur._extra || []).push(lines[i].text);
-        else {
+        if (flat) {
+          (cur._extra = cur._extra || []).push(lines[i].text);
+          (cur._srcExtra = cur._srcExtra || []).push(lines[i].raw || lines[i].text);
+        } else {
           cur._lines = cur._lines || [];
           cur._lines.push(lines[i].text);
+          cur._srcLines = cur._srcLines || [];
+          cur._srcLines.push(lines[i].raw || lines[i].text);
         }
       }
       i++;
@@ -197,6 +202,9 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
     items.push({
       t: full.replace(/\s*·\s*/g, ' · '),
       d: nameNew && verbatim !== 'plain' ? wrapNewBody(desc) : desc,
+      /* 这一条吃掉的原文行，出图页右侧「原文」栏直接显示这些句子。
+         raw = 归一化之前的原话（「改动前」不会被改成「调整前」） */
+      src: lines.slice(i, j).map(l => l.raw || l.text).join('\n'),
       _hero: (!!first.bold || (!!nk && nk.kind === 'hero')) && !TIER_LABEL_RE.test(full.trim()),
       /* 原文以冒号收尾（「…做如下调整：」），说明后面还有续段 */
       _cont: /[：:]\s*$/.test((body[body.length - 1] || '').trim()),
@@ -210,6 +218,7 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
     if (!it.t && it._lines) {
       it._cont = /[：:]\s*$/.test(String(it._lines[it._lines.length - 1] || '').trim());
       it.d = buildDesc(it._lines, verbatim);
+      it.src = (it._srcLines || it._lines).join('\n');
     }
     /* 平铺公告攒下来的正文：一行一行保留，编号和技能行不要挤成一句 */
     if (it._extra && it._extra.length) {
@@ -217,9 +226,12 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
         .map(l => /[：:]$/.test(String(l).trim()) ? String(l).trim() : buildDesc([l], verbatim))
         .filter(Boolean).join('\n');
       it.d = it.d ? String(it.d).replace(/\s+$/, '') + '\n' + add : add;
+      addSrc(it, (it._srcExtra || it._extra).join('\n'));
     }
     delete it._lines;
+    delete it._srcLines;
     delete it._extra;
+    delete it._srcExtra;
     return it;
   });
 }

@@ -145,7 +145,7 @@ function render(sections, meta) {
       html += '<div class="grp" data-name="' + esc(g.name) + '">';
       html += '<div class="grpHead"><input type="checkbox" class="headCk ckGrp" checked>' + esc(g.name) + '</div>';
       g.items.forEach(it => {
-        html += '<label class="item">'
+        html += '<label class="item" data-src="' + esc(it.src || '') + '">'
           + '<input type="checkbox" class="ck" checked>'
           + '<div class="body">'
           + '<div class="tline">'
@@ -211,12 +211,14 @@ function collect() {
         const t = itEl.querySelector('.t').value.trim();
         const d = itEl.querySelector('.d').value.trim();
         const sub = !!itEl.querySelector('.sb').checked;
+        /* 原句随条目一起带出去，出图页点「原文」不用再联网 */
+        const src = String(itEl.dataset.src || '').trim();
         /* 三级标签只画胶囊，说明文字要另起一条，否则会被静默丢掉 */
         if (sub && t) {
           items.push({ t, d: '', sub: true });
-          if (d) items.push({ t: '', d });
+          if (d) items.push(src ? { t: '', d, src } : { t: '', d });
         }
-        else if (t || d) items.push({ t, d });
+        else if (t || d) items.push(src ? { t, d, src } : { t, d });
       });
       if (items.length) sec.groups.push({ name: gEl.dataset.name, items });
     });
@@ -279,6 +281,12 @@ function nestChessKids(sections) {
     });
     const out = [];
     let lastLord = null;
+    /* 技能的原句并进棋手卡的原句：一条「原文」就能看到这位棋手的全部官方描述 */
+    const pushKid = (parent, kid) => {
+      parent.kids = parent.kids || [];
+      parent.kids.push(kid);
+      if (kid.src) addSrc(parent, kid.src);
+    };
     g.items.forEach(it => {
       if (it.sub || !it.t) { out.push(it); return; }
       if (isAnchor(it.t)) {
@@ -305,7 +313,7 @@ function nestChessKids(sections) {
             out.push(target);
           }
           target.kids = target.kids || [];
-          target.kids.push({ t: pair.skill, d: it.d || '' });
+          pushKid(target, { t: pair.skill, d: it.d || '', src: it.src || '' });
           return;
         }
       }
@@ -336,7 +344,7 @@ function nestChessKids(sections) {
           }
           lastLord = target;
           target.kids = target.kids || [];
-          target.kids.push({ t: mSelf[2].trim(), d: it.d || '' });
+          pushKid(target, { t: mSelf[2].trim(), d: it.d || '', src: it.src || '' });
           return;
         }
       }
@@ -348,7 +356,7 @@ function nestChessKids(sections) {
         && !/^[0-9]+级/.test(it.t)) target = lastLord;
       if (target) {
         target.kids = target.kids || [];
-        target.kids.push({ t: it.t, d: it.d || '' });
+        pushKid(target, { t: it.t, d: it.d || '', src: it.src || '' });
         return;
       }
       out.push(it);
@@ -417,6 +425,10 @@ function wholeData() {
   const data = collect();
   nestChessKids(data.sections);
   data.audit = auditNotice(data);
+  /* 整篇原文一起带走：出图页右侧「原文」栏整段显示，自己滚着看 */
+  if (lastRawText) data.rawText = lastRawText;
+  /* 网页版原文：出图页右侧拿它渲染一个小窗，样式和原网页一致 */
+  if (lastRawHtml) data.rawHtml = lastRawHtml;
   return data;
 }
 

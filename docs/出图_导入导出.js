@@ -122,18 +122,29 @@ function importInto(tipEl) {
   if (!secs.length) {
     tip.className = 'err';
     tip.textContent = '没识别到内容。这里要粘「公告提炼 → 复制整篇 JSON」的原样 JSON。';
+    openImportFold();
     return;
   }
   state.sections = secs;
-  let audit = null;
+  let audit = null, rawText = '', rawHtml = '';
   try {
     const o = JSON.parse(meta.text);
-    if (o && !Array.isArray(o)) audit = o.audit || null;
+    if (o && !Array.isArray(o)) {
+      audit = o.audit || null;
+      rawText = String(o.rawText || '');
+      rawHtml = String(o.rawHtml || '');
+    }
   } catch (_) { /* 不是对象就视为没有自查结果 */ }
+  /* 整篇公告原文：右侧栏渲染（旧 JSON 没这字段时留空，栏里退回纯文本/条目原句） */
+  state.rawText = rawText;
+  state.rawHtml = rawHtml;
 
   if (meta.server) { state.server = meta.server; setServerUI(); }
   if (meta.date) { state.date = meta.date; setDateUI(); }
   if (meta.server || meta.date) syncTitles();
+  updateStatus();
+  setImportState(`已导入 ${secs.length} 章`);
+  closeImportFold();
   pageIdx = 0;
   buildEditor(); render();
 
@@ -147,15 +158,6 @@ function importInto(tipEl) {
 }
 
 document.getElementById('btnImport1').addEventListener('click', () => importInto('importTip1'));
-
-document.getElementById('btnSample').addEventListener('click', () => {
-  clearAudit();
-  state.date = SAMPLE.date; state.server = SAMPLE.server; state.foot = SAMPLE.foot;
-  state.sections = JSON.parse(JSON.stringify(SAMPLE.sections));
-  syncTitles();
-  setDateUI(); setServerUI(); elFoot.value = state.foot;
-  buildEditor(); render();
-});
 
 /* ---------- 棋手立绘：已内置在 出图_立绘.js 的 PORTRAITS 里 ---------- */
 /* 当前公告里出现、但字典里没有的棋手名 */
@@ -302,19 +304,44 @@ function drawWatermark(ctx, W, H) {
   ctx.restore();
 }
 
-document.getElementById('btnExport').addEventListener('click', async () => {
+/* 导出：先点「导出」弹出选篇（局内 / 局外 / 合并全部），再走同一条导出流程 */
+document.getElementById('btnExport').addEventListener('click', e => {
+  e.stopPropagation();
+  const open = elExportMenu.hidden;
+  closeMenus();
+  elExportMenu.hidden = !open;
+});
+elExportMenu.addEventListener('click', e => {
+  const b = e.target.closest('button[data-k]');
+  if (!b) return;
+  closeMenus();
+  doExport(b.dataset.k);
+});
+
+async function doExport(choice) {
   const btn = document.getElementById('btnExport');
   const label = btn.textContent;
-  /* 输入防抖还没跑就先补一次重排，保证导出的是最新内容 */
-  if (renderTimer) render();
+  /* 选哪一篇只影响这一次导出：导出完把预览还原成用户原来的那一篇 */
+  const prevPart = state.part, prevSplit = state.split;
+  if (choice === 'all') state.split = false;
+  else { state.split = true; state.part = choice; }
+  const restore = () => {
+    state.part = prevPart;
+    state.split = prevSplit;
+    pageIdx = 0;
+    applyPartFilter();
+    render();
+  };
+  render();   /* 顺便清掉输入防抖，保证导出的是最新内容 */
   const ctx = cv.getContext('2d');
   const total = pagesCache.length;
-  if (!total) return;
+  if (!total) { restore(); return; }
   /* 分套时这一篇只有封面 = 还没有正文，出一张孤零零的封面没有意义 */
   if (state.split && total === 1) {
     clearTimeout(exportResetTimer);
     btn.textContent = '这一篇还没有内容';
     exportResetTimer = setTimeout(() => { btn.textContent = label; }, 1800);
+    restore();
     return;
   }
   clearTimeout(exportResetTimer);
@@ -373,25 +400,35 @@ document.getElementById('btnExport').addEventListener('click', async () => {
     exportResetTimer = setTimeout(() => { btn.textContent = label; }, 1800);
   }
   btn.disabled = false;
-  render();
-});
+  restore();
+}
 
 /* =======================  初始化  ======================= */
 fillMonths();
 setDateUI();
 setServerUI();
 elFoot.value = state.foot;
+setImportState('已载入示例');
 buildEditor();
 render();
 
 /* =======================  自动填充  ======================= */
 /* 解析规则只放在「公告提炼」里：出图页藏一个看不见的提炼页让它干活，
-   拿到第一章数据后走同一个导入入口，避免两套规则各写一遍。
+   拿到整篇数据后走同一个导入入口，避免两套规则各写一遍。
    getData(提炼页window) 自己决定抓哪一篇：带 ?newsid= 就抓那篇，不带就取最新 */
+/* 整篇 JSON 塞进导入框，再走统一的导入入口（两处自动填充共用） */
+function applyWholeData(data, title) {
+  const tip = document.getElementById('importTip1');
+  document.getElementById('importBox1').value = JSON.stringify(data, null, 2);
+  importInto('importTip1');
+  if (title) tip.textContent = '《' + title + '》　' + tip.textContent;
+}
+
 async function autoFill(getData, statusText) {
   const tip = document.getElementById('importTip1');
   tip.className = '';
   tip.textContent = statusText;
+  setImportState('正在抓取…');
   const frame = document.createElement('iframe');
   frame.style.display = 'none';
   frame.src = '公告提炼.html';
@@ -404,31 +441,105 @@ async function autoFill(getData, statusText) {
     });
     const got = await getData(frame.contentWindow);
     if (!got.data || !got.data.sections.length) throw new Error('这篇公告没有解析到内容');
-    document.getElementById('importBox1').value = JSON.stringify(got.data, null, 2);
-    importInto('importTip1');
-    if (got.title) tip.textContent = '《' + got.title + '》　' + tip.textContent;
+    applyWholeData(got.data, got.title);
   } catch (e) {
     tip.className = 'err';
     tip.textContent = '自动填充失败：' + (e.message || e) + '（仍可手动粘贴导入）';
+    openImportFold();
   } finally {
     frame.remove();
   }
 }
 
-(function autoStart() {
-  if (location.protocol === 'file:') {
-    const tip = document.getElementById('importTip1');
+/* 本地双击（file://）打开时读不到提炼页的 window（跨源），
+   改成消息一问一答：把公告编号发给藏着的提炼页，它抓取解析后回传整篇数据 */
+function noticeFromFrame(id) {
+  return new Promise((resolve, reject) => {
+    const frame = document.createElement('iframe');
+    frame.style.display = 'none';
+    frame.src = '公告提炼.html';
+    document.body.appendChild(frame);
+    const req = 'wxq-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    let done = false;
+    const finish = (err, val) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      window.removeEventListener('message', onMsg);
+      frame.remove();
+      err ? reject(err) : resolve(val);
+    };
+    const timer = setTimeout(() => finish(new Error('提炼页没有回应（25 秒），检查网络后重试')), 25000);
+    function onMsg(e) {
+      const d = e.data;
+      if (!d || d.type !== 'wxq-auto-result' || d.req !== req) return;
+      if (d.ok) finish(null, d);
+      else finish(new Error(d.error || '抓取失败'));
+    }
+    window.addEventListener('message', onMsg);
+    frame.addEventListener('load', () => {
+      frame.contentWindow.postMessage({ type: 'wxq-auto', req, id }, '*');
+    });
+  });
+}
+
+/* 本地粘贴链接 / 编号后抓取填充 */
+async function localFillFromUrl() {
+  const input = document.getElementById('localUrl');
+  const tip = document.getElementById('importTip1');
+  const btn = document.getElementById('btnLocalFetch');
+  const raw = String(input.value || '').trim();
+  const id = (raw.match(/newsid=(\d+)/i) || [])[1] || (/^\d+$/.test(raw) ? raw : '');
+  if (!id) {
     tip.className = 'err';
-    tip.textContent = '自动填充要用网址打开（双击本地文件不行），手动粘贴照常可用。';
+    tip.textContent = '链接里没有找到 newsid，粘贴公告链接或直接填编号。';
+    setImportState('没找到公告编号');
     return;
   }
+  tip.className = '';
+  tip.textContent = '正在抓取并解析这篇公告…';
+  setImportState('正在抓取…');
+  btn.disabled = true;
+  try {
+    const got = await noticeFromFrame(id);
+    if (!got.data || !got.data.sections.length) throw new Error('这篇公告没有解析到内容');
+    applyWholeData(got.data, '');
+    tip.className = '';
+    tip.textContent = `已按公告 ${id} 填好：${got.data.sections.length} 个章节`;
+  } catch (e) {
+    tip.className = 'err';
+    tip.textContent = '抓取失败：' + (e.message || e) + '（仍可手动粘贴导入）';
+    setImportState('抓取失败');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+(function autoStart() {
+  /* 两种打开方式都走「粘贴链接自动填充」：线上（http/https）和本地双击一样，
+     把公告链接或编号粘到那行，点「抓取并填充」就行 */
+  const row = document.getElementById('localUrlRow');
+  if (row) row.hidden = false;
+  const btn = document.getElementById('btnLocalFetch');
+  const input = document.getElementById('localUrl');
+  if (btn) btn.addEventListener('click', localFillFromUrl);
+  if (input) input.addEventListener('keydown', e => { if (e.key === 'Enter') localFillFromUrl(); });
+
+  if (location.protocol === 'file:') {
+    const tip = document.getElementById('importTip1');
+    tip.className = '';
+    tip.textContent = '双击打开时不能自动读公告：把公告链接粘到上面那行，点「抓取并填充」。';
+    setImportState('粘贴链接自动填充');
+    return;
+  }
+  /* 线上带 ?newsid= 打开时直接填这一篇；没带就等用户粘链接 */
   const id = new URLSearchParams(location.search).get('newsid');
   if (id) {
     autoFill(async w => ({ data: await w.__wxq.autoNotice(id), title: '' }), '正在抓取公告并解析整篇…');
   } else {
-    autoFill(async w => {
-      const r = await w.__wxq.autoLatest();
-      return { data: r.data, title: r.title };
-    }, '正在找最新一篇更新公告…');
+    const tip = document.getElementById('importTip1');
+    tip.className = '';
+    tip.textContent = '把公告链接（或编号）粘到上面那行，点「抓取并填充」，会自动抓取并解析整篇。';
+    setImportState('粘贴链接自动填充');
   }
 })();
