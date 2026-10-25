@@ -27,6 +27,13 @@ function parseNotice(html) {
   /* 整篇没有章节标题（10.20 体验服这类只写「棋手调整 / 英雄调整」分组）：
      全文就是第一章，长句也要走全原文 / 就地精简 */
   const onlyChapter = !host.querySelector('h1');
+  /* 章节全是局内调整（棋手调整 / 天赋调整 / 英雄调整 / 装备调整）：
+     合并后会套成「一、核心玩法更新」，整篇就是第一章，各章都要压缩、标金，
+     不能因为排在第二章以后就退回照抄原文（18915134） */
+  const h1Names = Array.from(host.querySelectorAll('h1')).map(x => clean(x.textContent));
+  const innerAll = h1Names.length > 1
+    && !h1Names.some(n => /核心玩法/.test(n) || OUTER_SEC_RE.test(n))
+    && h1Names.every(n => INNER_SEC_RE.test(n));
   /* 第一篇有名字的章节就是第一章（局内），沿用原来的全原文 / 精简逻辑；
      后面的章节都是局外，完全照抄原文：不配对调整前后、不压箭头、不标金 */
   let coreOpened = false;
@@ -40,7 +47,7 @@ function parseNotice(html) {
     sections.push(sec);
     grp = null;
     lastHeroItem = null;
-    secRaw = isFirst ? (onlyChapter || RAW_SEC_RE.test(nm)) : 'plain';
+    secRaw = (isFirst || innerAll) ? (onlyChapter || RAW_SEC_RE.test(nm)) : 'plain';
   };
   const openGrp = name => {
     if (!sec) openSec('未分类');
@@ -129,7 +136,7 @@ function parseNotice(html) {
       /* 英雄条目后面单独成段的档位 / 属性行并回这名英雄，不另起空标题卡：
          「10级：…」「10级技能：…」「机械仆从攻击速度：…」（18915134 的梦奇 / 米莱狄） */
       if (!it.t && it.d && lastHeroItem && grp.items[grp.items.length - 1] === lastHeroItem
-        && /^([0-9]{1,3}级(?:技能|被动|普攻|主动|大招|奥义|效果|伤害)?|基础技能|被动技能|主动技能|技能|[^：:]{0,10}(攻击速度|攻击力|生命值|法力值|护盾|技能范围|冷却|消耗|能量|物理防御|法术防御|伤害)(?:调整|优化)?)[：:]/.test(String(it.d).trim())) {
+        && /^([0-9]{1,3}级(?:技能|被动|普攻|主动|大招|奥义|效果|伤害)?|基础技能|被动技能|主动技能|技能|[^：:]{0,10}(攻击速度|攻击力|生命值|法力值|护盾|技能范围|冷却|消耗|能量|物理防御|法术防御|伤害)(?:调整|优化)?)(?:[：:]|\n|$)/.test(String(it.d).trim())) {
         lastHeroItem.d = (lastHeroItem.d ? lastHeroItem.d + '\n' : '') + String(it.d).trim();
         addSrc(lastHeroItem, it.src || String(it.d).trim());
         lastHeroItem._cont = false;
@@ -308,11 +315,13 @@ function parseNotice(html) {
 
     /* 局外：原文有时把「调整后 / 改动后 / 觉醒后」单独写成一个没有标题的段
        （神机：改动前在上一条里，改动后另起一段）。它仍是上一条的对照内容，
-       原文照抄地接在上一条后面；拆成空标题卡会看不出一一对应 */
-    const afterM = !lines[0].bold && lines[0].text.match(/^(调整|觉醒|改动)后[：:]/);
+       原文照抄地接在上一条后面；拆成空标题卡会看不出一一对应。
+       原文这一行常常不带冒号（「调整后」独占一行，18915134 的虞姬 / 大乔），
+       所以行尾也要认 */
+    const afterM = !lines[0].bold && lines[0].text.match(/^(调整|觉醒|改动)后(?:[：:]|$)/);
     if (secRaw === 'plain' && afterM && grp.items.length) {
       const last = grp.items[grp.items.length - 1];
-      if (last && !last.table && new RegExp(afterM[1] + '前[：:]').test(String(last.d || ''))) {
+      if (last && !last.table && new RegExp(afterM[1] + '前(?:[：:]|\\n|$)').test(String(last.d || ''))) {
         last.d = String(last.d).replace(/\s+$/, '') + '\n' +
           lines.map(l => String(l.text).trim()).filter(Boolean).join('\n');
         return;
