@@ -176,9 +176,12 @@ function parseNotice(html) {
       }
       if (!it.t && !it.d) return;
       /* 带「调整前 / 调整后」的条目是在改老内容，不是新增，标签再怎么写都不能当新增
-         （正文此时已经压成箭头，所以要看原始行 _raw） */
+         （正文此时已经压成箭头，所以要看原始行 _raw）。
+         局外章节（secRaw = 'plain'）原来不加前缀，导致「新增天赋」整段看不出是新增
+         （18915134 的帝临 / 勇冠三军 / 孙尚香），现在一律加：前缀只是标题标记，
+         不影响正文照抄原文 */
       const rawAdj = Array.isArray(it._raw) ? it._raw.join('') : String(it.d || '');
-      if (markNew && secRaw !== 'plain' && it.t && !it.sub && !/^新增[：:]/.test(it.t)
+      if (markNew && it.t && !it.sub && !/^新增[：:]/.test(it.t)
         && !/调整前|调整后/.test(rawAdj)) {
         /* 前面已有「新增：」时，天赋名里的冒号改用间隔号，避免一行两个冒号 */
         it.t = '新增：' + it.t.replace(/^([^：:]{1,12})[：:]\s*(\S.{0,12})$/, '$1 · $2');
