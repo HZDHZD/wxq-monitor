@@ -96,11 +96,18 @@ function paintFlow(ctx, cfg, scale, oy, T) {
   const secS    = m * T.secS * s;
   const secR    = m * T.secR * s;
   const secGapT = m * T.secGapT * s;
+  const secPadL = m * T.secPadL * s;
   const grpS    = m * T.grpS * s;
   const grpH    = m * T.grpH * s;
   const grpR    = m * T.grpR * s;
   const grpGapT = m * T.grpGapT * s;
   const grpGapB = m * T.grpGapB * s;
+  const grpPadL = m * T.grpPadL * s;
+  /* 章节条 / 分组胶囊的标题太长时折成多行，行高与单行一致，上下留白保持原样 */
+  const secLh = secS * 1.30;
+  const grpLh = grpS * 1.30;
+  const barH = (baseH, lh, n) => (n <= 1 ? baseH
+    : lh * n + Math.max(0, (baseH - lh) / 2) * 2);
   const itS     = m * T.itS * s;
   const itLh    = itS * T.itLhF;
   const itPad   = m * T.itPad * s;
@@ -150,10 +157,13 @@ function paintFlow(ctx, cfg, scale, oy, T) {
   const gapBanBody = noTitle ? 0 : m * 0.042 * bs;
 
   /* --- 正文分块 --- */
+  const left = pad + bodyPad;
   const tw0 = colW - itPad * 2 - itIndent - itPadR;
   /* 立绘卡与其他条目同宽（满宽），只有文字仍在 T.itRight 安全线前断行 */
   const gridW = colW;
   const lineR = W * T.itRight;
+  /* 章节条 / 分组胶囊的文字宽度上限：不进右侧遮挡区，也不越过 T.itRight 断行线 */
+  const barTextW = (padX) => Math.max(m * 0.06 * s, Math.min(innerW, lineR - left) - padX * 2);
   /* 单列横卡的缩略图宽度与字号同比例，保证不同字号下图文比例一致 */
   const thumbW = (w) => Math.round(w * (T.itThumb || 0.26) * s);
   const imgNameS = m * T.itNameS * s;
@@ -338,9 +348,17 @@ function paintFlow(ctx, cfg, scale, oy, T) {
   };
 
   const blocks = [];
+  /* 标题条 / 分组胶囊按可用宽度折行，行数与高度随文字长短变化 */
+  const barLines = (text, fs, weight, maxW) => {
+    setFont(ctx, fs, weight);
+    return wrapText(ctx, text, maxW);
+  };
   (sections || []).forEach(sec => {
     /* 没有名称的章节不画标题条，也不占高度 */
-    if ((sec.name || '').trim()) blocks.push({ type: 'sec', text: sec.name, cont: !!sec.cont });
+    if ((sec.name || '').trim()) {
+      const sl = barLines(sec.name, secS, 700, barTextW(secPadL));
+      blocks.push({ type: 'sec', text: sec.name, cont: !!sec.cont, lines: sl, h: barH(secBarH, secLh, sl.length) });
+    }
     (sec.groups || []).forEach(grp => {
       const its = (grp.items || []).filter(it =>
         (it.t || '').trim() !== '' || (it.d || '').trim() !== ''
@@ -348,7 +366,10 @@ function paintFlow(ctx, cfg, scale, oy, T) {
       /* 分组头下面没有内容就不画，避免页尾出现孤立的蓝色标签 */
       if (!its.length) return;
       /* 没有名称的分组不占标签高度，条目直接排在上一块下面 */
-      if ((grp.name || '').trim()) blocks.push({ type: 'grp', text: grp.name });
+      if ((grp.name || '').trim()) {
+        const gl = barLines(grp.name, grpS, 700, barTextW(grpPadL));
+        blocks.push({ type: 'grp', text: grp.name, lines: gl, h: barH(grpH, grpLh, gl.length) });
+      }
 
       /* 立绘只属于棋手：英雄调整等同名条目（如「镜」）不能复用棋手立绘 */
       const grpUseImg = useImg && /棋手/.test(grp.name || '');
@@ -446,10 +467,10 @@ function paintFlow(ctx, cfg, scale, oy, T) {
       /* 续页首块不再画章节条，高度也不占 */
       if (!(b.cont && prev === null)) {
         if (prev !== null) contentH += secGapT;
-        contentH += secBarH;
+        contentH += (b.h || secBarH);
       }
     }
-    else if (b.type === 'grp') { contentH += grpGapT + grpH + grpGapB; }
+    else if (b.type === 'grp') { contentH += grpGapT + (b.h || grpH) + grpGapB; }
     else { b.rows.forEach((r, i) => { contentH += r.h + (i < b.rows.length - 1 ? itGap : 0); }); }
     prev = b.type;
   });
@@ -640,7 +661,6 @@ function paintFlow(ctx, cfg, scale, oy, T) {
   /* --- 正文 --- */
   /* 从卡片顶部开始排，不在卡内垂直居中（居中会在顶部留出大片空白） */
   let y = bodyTop + bodyPad;
-  const left = pad + bodyPad;
   prev = null;
   let secIdx = 0;
   blocks.forEach(b => {
@@ -649,36 +669,44 @@ function paintFlow(ctx, cfg, scale, oy, T) {
       if (!(b.cont && prev === null)) {
         if (prev !== null) y += secGapT;
         secIdx++;
-        if (T.secFill) { rr(ctx, left, y, innerW, secBarH, secR); ctx.fillStyle = T.secFill; ctx.fill(); }
-        if (T.secAccent) { rr(ctx, left, y, m * 0.009 * s, secBarH, m * 0.004 * s); ctx.fillStyle = T.secAccent; ctx.fill(); }
+        const sh = b.h || secBarH;
+        const sl = b.lines || [b.text];
+        if (T.secFill) { rr(ctx, left, y, innerW, sh, secR); ctx.fillStyle = T.secFill; ctx.fill(); }
+        if (T.secAccent) { rr(ctx, left, y, m * 0.009 * s, sh, m * 0.004 * s); ctx.fillStyle = T.secAccent; ctx.fill(); }
         if (T.secRule) {
           ctx.strokeStyle = T.secRule; ctx.lineWidth = Math.max(1, m * 0.0022 * s);
-          ctx.beginPath(); ctx.moveTo(left, y + secBarH); ctx.lineTo(left + innerW, y + secBarH); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(left, y + sh); ctx.lineTo(left + innerW, y + sh); ctx.stroke();
         }
         setFont(ctx, secS, 700);
         ctx.fillStyle = T.secText;
         ctx.textBaseline = 'middle';
-        ctx.fillText(b.text, left + m * T.secPadL * s, y + secBarH / 2 + 1);
+        const sy = y + (sh - sl.length * secLh) / 2;
+        sl.forEach((l, i) => ctx.fillText(l, left + secPadL, sy + secLh * (i + 0.5) + 1));
         ctx.textBaseline = 'top';
-        if (T.secDecor) T.secDecor(ctx, { x: left, y, w: innerW, h: secBarH, m, s, idx: secIdx, text: b.text });
-        y += secBarH;
+        if (T.secDecor) T.secDecor(ctx, { x: left, y, w: innerW, h: sh, m, s, idx: secIdx, text: b.text });
+        y += sh;
       }
     } else if (b.type === 'grp') {
       y += grpGapT;
       if (b.text) {
+        const gh = b.h || grpH;
+        const gl = b.lines || [b.text];
         setFont(ctx, grpS, 700);
-        const gw = ctx.measureText(b.text).width + m * 0.052 * s;
-        if (T.grpFill) { rr(ctx, left, y, gw, grpH, grpR); ctx.fillStyle = T.grpFill; ctx.fill(); }
+        let gw = 0;
+        gl.forEach(l => { gw = Math.max(gw, ctx.measureText(l).width); });
+        gw = Math.min(innerW, gw + m * 0.052 * s);
+        if (T.grpFill) { rr(ctx, left, y, gw, gh, grpR); ctx.fillStyle = T.grpFill; ctx.fill(); }
         if (T.grpStroke) {
           ctx.strokeStyle = T.grpStroke; ctx.lineWidth = Math.max(1, m * T.grpStrokeW * s);
-          rr(ctx, left, y, gw, grpH, grpR); ctx.stroke();
+          rr(ctx, left, y, gw, gh, grpR); ctx.stroke();
         }
         ctx.fillStyle = T.grpText;
         ctx.textBaseline = 'middle';
-        ctx.fillText(b.text, left + m * T.grpPadL * s, y + grpH / 2 + 1);
+        const gyl = y + (gh - gl.length * grpLh) / 2;
+        gl.forEach((l, i) => ctx.fillText(l, left + grpPadL, gyl + grpLh * (i + 0.5) + 1));
         ctx.textBaseline = 'top';
       }
-      y += grpH + grpGapB;
+      y += (b.h || grpH) + grpGapB;
     } else {
       b.rows.forEach((r, i) => {
         const rowW = r.cells.reduce((a, c) => a + (c.w || colW), 0) + colGap * Math.max(0, r.cells.length - 1);
