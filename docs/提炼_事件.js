@@ -109,14 +109,25 @@ async function autoLatest() {
 }
 
 /* 出图页在本地双击（file://）打开时读不到这边的 window（跨源），
-   改用消息一问一答：它把公告编号发过来，这里抓取解析后把整篇数据发回去 */
+   改用消息一问一答：它把公告编号发过来，这里抓取解析后把整篇数据发回去。
+   也支持问「最近几篇公告」，用来填出图页那个下拉 */
 window.addEventListener('message', async e => {
   const d = e.data;
-  if (!d || d.type !== 'wxq-auto') return;
+  if (!d || !d.type) return;
   const back = payload => {
     if (!e.source) return;
-    e.source.postMessage(Object.assign({ type: 'wxq-auto-result', req: d.req }, payload), '*');
+    e.source.postMessage(Object.assign({ type: d.type + '-result', req: d.req }, payload), '*');
   };
+  if (d.type === 'wxq-list') {
+    try {
+      const list = await loadNewsList(12);
+      back({ ok: true, list: list.filter(it => /更新/.test(it.title)).slice(0, d.n || 10) });
+    } catch (err) {
+      back({ ok: false, error: (err && err.message) || String(err) });
+    }
+    return;
+  }
+  if (d.type !== 'wxq-auto') return;
   try {
     back({ ok: true, data: await autoNotice(d.id) });
   } catch (err) {

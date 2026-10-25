@@ -415,6 +415,27 @@ function auditNotice(data) {
       });
     });
   }));
+  /* 名字没进名单：新出的棋手 / 英雄 / 天赋常被当成普通正文拆散，也容易漏立绘。
+     列出来提醒人工确认、顺手补名单（条目名末尾是「调整 / 修复」这类的是正文标题，不报） */
+  out.unknown = [];
+  const seen = new Set();
+  const NAME_TAIL_RE = /(调整|更新|修复|说明|优化|新增|开启|关闭)$/;
+  data.sections.forEach((sec, si) => sec.groups.forEach((g, gi) => {
+    if (!/棋手|英雄|天赋|技能|装备|效果牌/.test(g.name || '')) return;
+    g.items.forEach((it, ii) => {
+      if (out.unknown.length >= 12) return;
+      const t = String(it.t || '').trim();
+      if (!t) return;
+      const nm = t.split(/\s*[·・|｜]\s*/)[0].replace(/【.*?】/g, '').trim();
+      if (!nm || nm.length < 2 || nm.length > 12) return;
+      if (!/^[\u4e00-\u9fa5A-Za-z0-9\-\s]+$/.test(nm)) return;
+      if (NAME_TAIL_RE.test(nm) || NOT_NAME_RE.test(nm) || STRUCT_LABEL_RE.test(nm)
+        || TIER_LABEL_RE.test(nm) || SUB_RE.test(nm)) return;
+      if (lexLookup(nm) || seen.has(nm)) return;
+      seen.add(nm);
+      out.unknown.push({ si, gi, ii, msg: `${t}：可能拆错，或名单里还没有这个名字` });
+    });
+  }));
   return out;
 }
 

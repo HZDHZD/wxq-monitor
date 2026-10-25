@@ -42,6 +42,10 @@ function renderAudit(secs, audit) {
   ((audit && audit.own) || []).forEach(x => auditTasks.push(typeof x === 'string'
     ? { msg: '归属 · ' + x }
     : Object.assign({}, x, { msg: '归属 · ' + x.msg })));
+  /* 名字不在名单里：新棋手/新英雄/新天赋容易被当正文拆散，提醒补名单 */
+  ((audit && audit.unknown) || []).forEach(x => auditTasks.push(typeof x === 'string'
+    ? { msg: '名单里没有 · ' + x }
+    : Object.assign({}, x, { msg: '名单里没有 · ' + x.msg })));
   auditStructure(secs).forEach(x => auditTasks.push(x));
   const miss = missingPortraits();
   if (miss.length) auditTasks.push({ msg: '缺立绘 · ' + miss.join('、') });
@@ -515,6 +519,41 @@ async function localFillFromUrl() {
   }
 }
 
+/* 最近几篇公告的下拉：问藏着的提炼页要一份列表（双击本地也能用，走 postMessage） */
+function loadRecentList() {
+  const sel = document.getElementById('recentSel');
+  if (!sel) return;
+  const frame = document.createElement('iframe');
+  frame.style.display = 'none';
+  frame.src = '公告提炼.html';
+  document.body.appendChild(frame);
+  const req = 'wxq-l-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+  let done = false;
+  const finish = list => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    window.removeEventListener('message', onMsg);
+    frame.remove();
+    (list || []).forEach(it => {
+      const op = document.createElement('option');
+      op.value = it.id;
+      op.textContent = String(it.title || it.id).slice(0, 18);
+      sel.appendChild(op);
+    });
+  };
+  const timer = setTimeout(() => finish([]), 20000);
+  function onMsg(e) {
+    const d = e.data;
+    if (!d || d.type !== 'wxq-list-result' || d.req !== req) return;
+    finish(d.ok ? d.list : []);
+  }
+  window.addEventListener('message', onMsg);
+  frame.addEventListener('load', () => {
+    frame.contentWindow.postMessage({ type: 'wxq-list', req, n: 10 }, '*');
+  });
+}
+
 (function autoStart() {
   /* 两种打开方式都走「粘贴链接自动填充」：线上（http/https）和本地双击一样，
      把公告链接或编号粘到那行，点「抓取并填充」就行 */
@@ -524,6 +563,17 @@ async function localFillFromUrl() {
   const input = document.getElementById('localUrl');
   if (btn) btn.addEventListener('click', localFillFromUrl);
   if (input) input.addEventListener('keydown', e => { if (e.key === 'Enter') localFillFromUrl(); });
+  /* 最近几篇公告：选一篇直接抓取，选完把下拉复位 */
+  const sel = document.getElementById('recentSel');
+  if (sel) {
+    sel.addEventListener('change', () => {
+      if (!sel.value) return;
+      if (input) input.value = sel.value;
+      sel.value = '';
+      localFillFromUrl();
+    });
+    loadRecentList();
+  }
 
   if (location.protocol === 'file:') {
     const tip = document.getElementById('importTip1');
