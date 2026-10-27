@@ -36,14 +36,21 @@ API_URL = "https://apps.game.qq.com/cmc/cross"
 API_SECRET = "9784d353d1f9ca34a59b61752630dade"
 API_SOURCE = "web_pc"
 API_BIZ = "389"
-CHANID_ANNOUNCEMENT = "7061"
+CHANID_ANNOUNCEMENT = "7061"  # 公告
+CHANID_COLUMN = "7063"        # 栏目（万万有看到等官方栏目）
+TAB_ANNOUNCEMENT = "7061"     # 详情页 tab 参数，沿用旧值
+TAB_COLUMN = "4"              # 详情页 tab 参数：4 = 栏目
 
-DETAIL_URL = "https://wxq.qq.com/cp/a20260707sfgw/newsdetail.html?newsid={newsid}&tab={chanid}"
-# 出图页（GitHub Pages）：带上 newsid 打开就自动填好第一章
+DETAIL_URL = "https://wxq.qq.com/cp/a20260707sfgw/newsdetail.html?newsid={newsid}&tab={tab}"
+# 出图页（GitHub Pages）：带上 newsid 打开就自动填好第一章（仅适用公告）
 DRAW_URL = "https://hzdhzd.github.io/wxq-monitor/auto.html?newsid={newsid}"
 
 # 标题过滤关键词（与本地版一致）
 TITLE_KEYWORDS = ("更新", "开服", "关服", "体验服", "正式服")
+# 栏目分类只提醒这个系列
+COLUMN_KEYWORDS = ("万万有看到",)
+# 账本标记：栏目分类已完成首次静默入账
+COLUMN_BASED_KEY = "_column_based"
 
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -56,7 +63,7 @@ def log(msg: str):
     print(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC] {msg}", flush=True)
 
 
-def fetch_channel(chanid: str, limit: int = 30) -> list:
+def fetch_channel(chanid: str, tab: str, kind: str, limit: int = 30) -> list:
     ts = str(round(time.time()))
     sign = hashlib.md5((API_SECRET + API_SOURCE + API_BIZ + ts).encode()).hexdigest()
     params = {
@@ -77,7 +84,8 @@ def fetch_channel(chanid: str, limit: int = 30) -> list:
         raise ValueError(f"接口返回错误：{data.get('msg')}")
     result = []
     for it in data["data"].get("items", []):
-        newsid = it.get("iNewsId")
+        # 栏目里的视频内容 iNewsId 为 0，只有 iId 唯一（详情页也按 iId 打开）
+        newsid = it.get("iId") or it.get("iNewsId")
         if not newsid:
             continue
         result.append({
@@ -85,7 +93,8 @@ def fetch_channel(chanid: str, limit: int = 30) -> list:
             "title": (it.get("sTitle") or "").strip(),
             "time": it.get("sIdxTime") or it.get("sCreated") or "",
             "version": (it.get("sGameVersion") or "").strip(),
-            "url": DETAIL_URL.format(newsid=newsid, chanid=chanid),
+            "kind": kind,
+            "url": DETAIL_URL.format(newsid=newsid, tab=tab),
             "draw": DRAW_URL.format(newsid=newsid),
         })
     return result
@@ -134,21 +143,24 @@ def build_email_html(new_items: list) -> str:
     rows = []
     for it in new_items:
         ver = f'（版本 {it["version"]}）' if it.get("version") else ""
+        # 出图页只适用公告第一章，栏目内容只给原文链接
+        draw = (f'<div style="margin-top:8px">'
+                f'<a href="{it["draw"]}" style="display:inline-block;padding:6px 14px;'
+                f'background:#1a73e8;color:#fff;border-radius:6px;font-size:13px;'
+                f'text-decoration:none">打开出图页（自动填好第一章）</a></div>'
+                if it.get("kind") == "公告" else "")
         rows.append(
             f'<div style="border:1px solid #e0e0e0;border-radius:8px;'
             f'padding:12px 16px;margin:10px 0;background:#fafafa">'
             f'<a href="{it["url"]}" style="font-size:16px;color:#1a73e8;'
             f'text-decoration:none;font-weight:bold">{it["title"]}{ver}</a>'
             f'<div style="color:#999;font-size:12px;margin-top:4px">'
-            f'发布时间：{it["time"]}</div>'
-            f'<div style="margin-top:8px">'
-            f'<a href="{it["draw"]}" style="display:inline-block;padding:6px 14px;'
-            f'background:#1a73e8;color:#fff;border-radius:6px;font-size:13px;'
-            f'text-decoration:none">打开出图页（自动填好第一章）</a></div></div>')
+            f'{it.get("kind", "公告")} · 发布时间：{it["time"]}</div>'
+            f'{draw}</div>')
     return ('<div style="font-family:Microsoft YaHei,Arial,sans-serif;'
             'max-width:640px;margin:0 auto;padding:16px">'
-            '<h2 style="color:#333">王者万象棋 新公告提醒</h2>'
-            f'<p style="color:#555">检测到 {len(new_items)} 条新公告：</p>'
+            '<h2 style="color:#333">王者万象棋 新内容提醒</h2>'
+            f'<p style="color:#555">检测到 {len(new_items)} 条新内容：</p>'
             + "".join(rows) +
             '<p style="color:#aaa;font-size:12px">本邮件由万象棋公告监控（GitHub Actions 云端版）自动发送 · '
             '<a href="https://wxq.qq.com/cp/a20260707sfgw/newslist.html">'
@@ -197,40 +209,56 @@ def main():
         sys.exit(1)
 
     try:
-        items = fetch_channel(CHANID_ANNOUNCEMENT)
+        announcements = fetch_channel(CHANID_ANNOUNCEMENT, TAB_ANNOUNCEMENT, "公告")
+        column = fetch_channel(CHANID_COLUMN, TAB_COLUMN, "栏目")
     except Exception as ex:
         log(f"抓取失败：{ex}")
         sys.exit(1)
-    items = [it for it in items if any(k in it["title"] for k in TITLE_KEYWORDS)]
-    log(f"官网「公告」共 {len(items)} 条")
+    announcements = [it for it in announcements if any(k in it["title"] for k in TITLE_KEYWORDS)]
+    column = [it for it in column if any(k in it["title"] for k in COLUMN_KEYWORDS)]
+    log(f"官网「公告」共 {len(announcements)} 条，「栏目」共 {len(column)} 条")
+    items = announcements + column
 
     seen = load_seen()
     if not seen:
         for it in items:
             seen[it["id"]] = it["title"]
+        seen[COLUMN_BASED_KEY] = "1"
         save_seen(seen)
-        log(f"账本为空，已记录 {len(items)} 条历史公告作为基线，不提醒。")
+        log(f"账本为空，已记录 {len(items)} 条历史内容作为基线，不提醒。")
         ping_ok()
         return
 
+    # 栏目分类首次接入：把已有历史内容静默入账，不补发
+    if COLUMN_BASED_KEY not in seen:
+        added = 0
+        for it in column:
+            if it["id"] not in seen:
+                seen[it["id"]] = it["title"]
+                added += 1
+        seen[COLUMN_BASED_KEY] = "1"
+        save_seen(seen)
+        log(f"栏目分类首次接入，已静默记录 {added} 条历史内容，不提醒。")
+
     new_items = [it for it in items if it["id"] not in seen]
     if not new_items:
-        log("没有新公告。")
+        log("没有新内容。")
         ping_ok()
         return
 
     new_items.sort(key=lambda x: x["time"], reverse=True)
     for it in new_items:
-        log(f"★ 新公告：{it['title']}  {it['time']}")
+        log(f"★ 新{it['kind']}：{it['title']}  {it['time']}")
         log(f"   链接：{it['url']}")
 
     titles = [it["title"] for it in new_items]
-    subject = f"万象棋新公告：{titles[0]}" + (f" 等{len(new_items)}条" if len(new_items) > 1 else "")
+    label = "新公告" if any(it["kind"] == "公告" for it in new_items) else "新内容"
+    subject = f"万象棋{label}：{titles[0]}" + (f" 等{len(new_items)}条" if len(new_items) > 1 else "")
     try:
         send_email(subject, build_email_html(new_items))
-        log(f"公告邮件已发送至 {os.environ['TO_ADDRS']}")
+        log(f"提醒邮件已发送至 {os.environ['TO_ADDRS']}")
     except Exception as ex:
-        log(f"邮件发送失败：{ex}（公告不入账，下次运行自动重试）")
+        log(f"邮件发送失败：{ex}（内容不入账，下次运行自动重试）")
         sys.exit(1)
 
     for it in new_items:
