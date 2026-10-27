@@ -519,6 +519,8 @@ function render() {
     title: state.title.trim() || '（未填写标题）',
     sub: state.sub.trim(),
     foot: state.foot.trim(),
+    cta: state.cta,
+    slogan: state.slogan,
     sections: state.sections
   };
 

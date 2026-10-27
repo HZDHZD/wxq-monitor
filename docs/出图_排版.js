@@ -119,7 +119,11 @@ function paintFlow(ctx, cfg, scale, oy, T) {
   const itGap   = m * T.itGap * s;
   const itIndent= (!T.card && T.itBullet) ? m * 0.028 * s : 0;
   const footS   = m * T.footS * s;
-  const footRes = foot ? (footS + m * 0.032 * s) : 0;
+  /* 内容页底部一行：标语 + 互动引导，字号跟正文一致，居中；署名在卡片右下方橙色区 */
+  const ctaText    = String(cfg.cta || '').trim();
+  const sloganText = String(cfg.slogan || '').trim();
+  const tipText    = [sloganText, ctaText].filter(Boolean).join('｜');
+  const tipRes     = tipText ? (itS + m * 0.032 * s) : 0;
 
   const innerW = cw - bodyPad * 2 - safeR;                   /* 内容缩进，避开右侧互动按钮列 */
   const cols = (W > H * 1.15) ? 2 : 1;
@@ -474,7 +478,7 @@ function paintFlow(ctx, cfg, scale, oy, T) {
     else { b.rows.forEach((r, i) => { contentH += r.h + (i < b.rows.length - 1 ? itGap : 0); }); }
     prev = b.type;
   });
-  contentH += footRes + bodyPad;
+  contentH += tipRes + bodyPad;
 
   const bodyTop = topY + banH + gapBanBody;
 
@@ -800,11 +804,23 @@ function paintFlow(ctx, cfg, scale, oy, T) {
     prev = b.type;
   });
 
-  if (foot) {
-    setFont(ctx, footS, 600);
+  /* 底部一行：标语 + 互动引导，与正文同字号、居中 */
+  if (tipText) {
+    setFont(ctx, itS, 600);
+    ctx.textAlign = 'center';
     ctx.fillStyle = T.footColor;
-    const fw = ctx.measureText(foot).width;
-    ctx.fillText(foot, left + innerW - fw, bodyTop + bodyH - bodyPad - footS);
+    ctx.fillText(tipText, W / 2, bodyTop + bodyH - bodyPad - itS);
+    ctx.textAlign = 'left';
+  }
+  /* 署名：卡片下方橙色区，右下角 */
+  if (foot) {
+    ctx.save();
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    setFont(ctx, Math.round(m * 0.022), 600);
+    ctx.fillStyle = 'rgba(255,255,255,0.86)';
+    ctx.fillText(foot, W - pad, H - Math.round(m * 0.018));
+    ctx.restore();
   }
 
   ctx.restore();

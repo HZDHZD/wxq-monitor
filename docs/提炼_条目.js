@@ -163,7 +163,11 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
        英雄调整里紧跟的「基础技能 / 攻击力 / 10级」是属性档位，留在正文 */
     if (allowSkill && name && j < lines.length) {
       const nx = lines[j];
+      /* 只有确认是棋手（名单里的 lords）或下一行本身在名单里，才把下一行并进标题；
+         棋手名查不到时下一行是正文（「秘技任务-海的拥抱 / 现在第1回合进度为1」） */
+      const ownerLk = lexLookup(name);
       if (!nx.bold && SHORT_RE.test(nx.text) && !NOT_NAME_RE.test(nx.text) && !/[。！？；：:]$/.test(nx.text)
+        && ((ownerLk && ownerLk.kind === 'lord') || !!lexLookup(nx.text.trim()))
         && !TIER_LABEL_RE.test(nx.text.trim())
         && !(flat && /[：:]/.test(nx.text))) {
         skill = nx.text;

@@ -251,6 +251,15 @@ function parseNotice(html) {
     const optHead = /(优化|改动)$/.test(head ? head.text : '')
       && !!sec && /核心玩法/.test(sec.name)
       && !!nextEl && /^[1１][.、．]/.test(clean(nextEl.textContent || ''));
+    /* 同一分组名又在段首重复出现（「天赋调整 / 技能突破：亚瑟 / 调整前…」）：
+       这是分组标签，不是条目名；丢掉这一行并结束「新增」作用域，
+       否则真正的条目名会被当成正文第一行，标题变成重复的分组名 */
+    if (head && grp && clean(grp.name) === clean(head.text)
+      && head.text.length <= 14 && !/[。！？；：，、]$/.test(head.text)) {
+      markNew = false;
+      lines = lines.slice(1);
+      if (!lines.length) return;
+    }
     if (head && head.bold && head.bold === head.text && head.text.length <= 14
       && !/[。！？；：，、]$/.test(head.text)
       /* 整篇还没有章节（没有 h1）时，首行加粗短名就是分类标题：

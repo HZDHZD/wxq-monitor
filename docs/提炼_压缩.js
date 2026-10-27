@@ -59,6 +59,13 @@ function compressPair(b, a) {
   }
   if (depth > 0 && openAt >= 0) p = openAt;
   let pre = b.slice(0, p), lb = b.slice(p), la = a.slice(p);
+  /* 公共前缀只是修饰语、变化从数量词开始时（「场上随机5名英雄等级+8」→
+     「场上随机英雄等级+5」）：把前缀提成公共的，右支就丢了修饰范围，
+     读成「… → 英雄等级+5」。一侧的数量词在另一侧完全不存在时，两侧都写全 */
+  const Q_HEAD_RE = /^[0-9]+(?:\.[0-9]+)?[名个张枚件点种位条回合层次]/;
+  const mL = lb.match(Q_HEAD_RE), mR = la.match(Q_HEAD_RE);
+  if (pre && ((mL && !/^[0-9]/.test(la) && !la.includes(mL[0]))
+    || (mR && !/^[0-9]/.test(lb) && !lb.includes(mR[0])))) return b + ' → ' + a;
   /* 「提升至 / 调整为」这类叙述词留在前缀里：它是两版共有的原文，
      去掉后同一篇公告里会出现「光辉伤害17% → 10+20%」和
      「导弹伤害提升至30+80% → 30+90%」两种写法 */

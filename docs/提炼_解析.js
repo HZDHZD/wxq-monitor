@@ -62,6 +62,9 @@ const ACTION_HEAD_RE = /^(修复|优化|调整|新增|删除|移除|修正|修�
 const ITEM_NAME_CH_RE = /^[\u4e00-\u9fa5A-Za-z0-9·\-\s]+$/;
 function looksLikeItemName(t) {
   if (!t || t.length > 14) return false;
+  /* 「技能突破：亚瑟」这类天赋名本身带冒号，按官方写法当条目名 */
+  const tc = t.match(/^([^：:]{1,12})[：:]\s*(\S{1,12})$/);
+  if (tc && TALENT_HEAD_RE.test(tc[1])) return !NOT_NAME_RE.test(t);
   if (!ITEM_NAME_CH_RE.test(t)) return false;
   if (NOT_NAME_RE.test(t) || TIER_LABEL_RE.test(t) || ATTR_HEAD_RE.test(t)) return false;
   if (ACTION_HEAD_RE.test(t) || SUB_RE.test(t)) return false;
