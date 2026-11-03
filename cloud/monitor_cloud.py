@@ -13,8 +13,10 @@
 """
 
 import hashlib
+import html
 import json
 import os
+import re
 import smtplib
 import ssl
 import sys
@@ -29,6 +31,7 @@ import requests
 
 BASE_DIR = Path(__file__).resolve().parent
 SEEN_PATH = BASE_DIR / "seen_announcements.json"
+BODY_STATE_PATH = BASE_DIR / "body_state.json"
 HEARTBEAT_PATH = BASE_DIR / "last_run.txt"
 
 # ===== 万象棋官网新闻接口（与本地版完全一致）=====
@@ -44,6 +47,13 @@ TAB_COLUMN = "4"              # 详情页 tab 参数：4 = 栏目
 DETAIL_URL = "https://wxq.qq.com/cp/a20260707sfgw/newsdetail.html?newsid={newsid}&tab={tab}"
 # 出图页（GitHub Pages）：带上 newsid 打开就自动填好第一章（仅适用公告）
 DRAW_URL = "https://hzdhzd.github.io/wxq-monitor/auto.html?newsid={newsid}"
+
+# ===== 正文改动监控 =====
+# 只盯最近 2 天发布的公告。邮件不限量，这里是 10 分钟一轮、发现改动就发，
+# 同一篇在相邻两轮之间的多次改动自然合并成一封。
+# 新公告提醒走另一条逻辑，发布时记下正文指纹做基线，之后的第一次改动立即提醒。
+DETAIL_API_URL = "https://apps.game.qq.com/wmp/v3.1/public/searchNews.php"
+WATCH_DAYS = 2
 
 # 标题过滤关键词（与本地版一致）
 TITLE_KEYWORDS = ("更新", "开服", "关服", "体验服", "正式服")
@@ -100,6 +110,137 @@ def fetch_channel(chanid: str, tab: str, kind: str, limit: int = 30) -> list:
     return result
 
 
+# ---------------------------------------------------------------- 公告正文（改动检测）
+
+def fetch_body(newsid: str) -> str:
+    """详情接口返回 JSONP（var searchObj={...}），取 msg.sContent 的正文 HTML。"""
+    r = requests.get(DETAIL_API_URL, params={
+        "p0": API_BIZ, "source": API_SOURCE, "id": newsid, "_": str(int(time.time() * 1000)),
+    }, headers=HEADERS, timeout=20)
+    r.raise_for_status()
+    text = r.text
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end == -1:
+        raise ValueError("详情接口返回异常")
+    data = json.loads(text[start:end + 1])
+    content = (data.get("msg") or {}).get("sContent") or ""
+    if not content:
+        raise ValueError("详情里没有正文")
+    return content
+
+
+_TAG_BREAK_RE = re.compile(r"<\s*(br|hr)\s*/?\s*>|<\s*/\s*(p|div|li|tr|h[1-6]|section|article|blockquote)\s*>",
+                           re.I)
+_TAG_RE = re.compile(r"<[^>]+>")
+_SCRIPT_RE = re.compile(r"<(script|style)[^>]*>[\s\S]*?</\1>", re.I)
+_CONTROL_RE = re.compile(r"[\ue000-\uf8ff\ufffd]")
+
+
+def normalize_body(raw: str) -> str:
+    """把正文 HTML 归一成纯文本，只用于比对指纹：
+    去脚本/样式/图片标签，块级标签转换行，实体解码，去图标字体私用区字符，
+    再压掉行内空白和空行。这样图片换地址、空行增删都不会误判为改动。"""
+    s = _SCRIPT_RE.sub("", raw or "")
+    s = re.sub(r"<img[^>]*>", "", s, flags=re.I)
+    s = _TAG_BREAK_RE.sub("\n", s)
+    s = _TAG_RE.sub("", s)
+    s = html.unescape(s).replace("\u00a0", " ")
+    s = _CONTROL_RE.sub("", s)
+    lines = []
+    for line in s.split("\n"):
+        line = re.sub(r"\s+", " ", line).strip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def body_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def parse_publish_time(value: str):
+    try:
+        return datetime.strptime((value or "").strip(), "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone(timedelta(hours=8)))
+    except Exception:
+        return None
+
+
+def load_body_state() -> dict:
+    if BODY_STATE_PATH.exists():
+        try:
+            raw = json.loads(BODY_STATE_PATH.read_text(encoding="utf-8"))
+            return raw if isinstance(raw, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def save_body_state(state: dict) -> bool:
+    """内容没变就不落盘，避免每轮都产生一次提交。"""
+    text = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True)
+    if BODY_STATE_PATH.exists():
+        try:
+            if BODY_STATE_PATH.read_text(encoding="utf-8").strip() == text.strip():
+                return False
+        except Exception:
+            pass
+    BODY_STATE_PATH.write_text(text, encoding="utf-8")
+    return True
+
+
+def collect_body_changes(announcements: list):
+    """抓最近 2 天公告的正文，与账本里的指纹比对。
+
+    返回 (到期的改动列表, 新的正文账本)。
+    账本每篇：{title, hash, notified, count}
+      hash      = 最近一次抓到的正文指纹
+      notified  = 最近一次提醒时的正文指纹（hash != notified 表示有未提醒的改动）
+      count     = 累计检测到的改动次数（提醒标题里的「第N次」）
+
+    邮件不限量：每轮（约 10 分钟）发现改动就立即提醒，不再做冷却；
+    冷却只留给微信（Worker 那边）。
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=WATCH_DAYS)
+    watched = []
+    for it in announcements:
+        dt = parse_publish_time(it.get("time", ""))
+        if dt and dt >= cutoff:
+            watched.append(it)
+
+    state = load_body_state()
+    keep, due = {}, []
+    for it in watched:
+        try:
+            digest = body_hash(normalize_body(fetch_body(it["id"])))
+        except Exception as ex:
+            log(f"正文抓取失败 {it['id']}：{ex}（跳过，下次再试）")
+            if it["id"] in state:
+                keep[it["id"]] = state[it["id"]]
+            continue
+
+        st = state.get(it["id"])
+        if not st or not st.get("hash"):
+            # 首次见到这篇（新公告首发，或监控刚上线）：静默记基线，不提醒
+            keep[it["id"]] = {"title": it["title"], "hash": digest, "notified": digest, "count": 0}
+            continue
+
+        st["title"] = it["title"]
+        st.pop("last_push", None)
+        if st["hash"] != digest:
+            st["count"] = int(st.get("count") or 0) + 1
+            st["hash"] = digest
+            log(f"✎ 正文有改动（第{st['count']}次）：{it['title']}  {it['time']}")
+
+        # 邮件不限量：有未提醒的改动就本轮发，不做冷却
+        if st["hash"] != st.get("notified"):
+            due.append({"item": it, "count": int(st["count"])})
+            st["notified"] = st["hash"]
+        keep[it["id"]] = st
+
+    return due, keep
+
+
 def load_seen() -> dict:
     if SEEN_PATH.exists():
         raw = json.loads(SEEN_PATH.read_text(encoding="utf-8"))
@@ -139,7 +280,7 @@ def send_email(subject: str, html: str):
         server.quit()
 
 
-def build_email_html(new_items: list) -> str:
+def build_email_html(new_items: list, changes: list) -> str:
     rows = []
     for it in new_items:
         ver = f'（版本 {it["version"]}）' if it.get("version") else ""
@@ -157,14 +298,50 @@ def build_email_html(new_items: list) -> str:
             f'<div style="color:#999;font-size:12px;margin-top:4px">'
             f'{it.get("kind", "公告")} · 发布时间：{it["time"]}</div>'
             f'{draw}</div>')
-    return ('<div style="font-family:Microsoft YaHei,Arial,sans-serif;'
-            'max-width:640px;margin:0 auto;padding:16px">'
-            '<h2 style="color:#333">王者万象棋 新内容提醒</h2>'
-            f'<p style="color:#555">检测到 {len(new_items)} 条新内容：</p>'
-            + "".join(rows) +
-            '<p style="color:#aaa;font-size:12px">本邮件由万象棋公告监控（GitHub Actions 云端版）自动发送 · '
-            '<a href="https://wxq.qq.com/cp/a20260707sfgw/newslist.html">'
-            '官网新闻列表</a></p></div>')
+
+    change_rows = []
+    for ch in changes:
+        it = ch["item"]
+        change_rows.append(
+            f'<div style="border:1px solid #f0d38a;border-left:4px solid #f59e0b;'
+            f'border-radius:8px;padding:12px 16px;margin:10px 0;background:#fffaf0">'
+            f'<a href="{it["url"]}" style="font-size:16px;color:#b45309;'
+            f'text-decoration:none;font-weight:bold">'
+            f'【公告有改动·第{ch["count"]}次】{it["title"]}</a>'
+            f'<div style="color:#999;font-size:12px;margin-top:4px">'
+            f'公告 · 发布时间：{it["time"]}</div>'
+            f'<div style="margin-top:8px">'
+            f'<a href="{it["draw"]}" style="display:inline-block;padding:6px 14px;'
+            f'background:#f59e0b;color:#fff;border-radius:6px;font-size:13px;'
+            f'text-decoration:none">打开出图页（按最新正文重新出图）</a></div></div>')
+
+    parts = ['<div style="font-family:Microsoft YaHei,Arial,sans-serif;'
+             'max-width:640px;margin:0 auto;padding:16px">'
+             '<h2 style="color:#333">王者万象棋 公告提醒</h2>']
+    if new_items:
+        parts.append(f'<p style="color:#555">新发布 {len(new_items)} 条：</p>' + "".join(rows))
+    if changes:
+        parts.append('<p style="color:#555">已发布的公告正文有改动（每轮检查发现改动就发，同一篇相邻两轮的改动合并为一封）：</p>'
+                     + "".join(change_rows))
+    parts.append('<p style="color:#aaa;font-size:12px">本邮件由万象棋公告监控（GitHub Actions 云端版）自动发送 · '
+                 '<a href="https://wxq.qq.com/cp/a20260707sfgw/newslist.html">'
+                 '官网新闻列表</a></p></div>')
+    return "".join(parts)
+
+
+def build_subject(new_items: list, changes: list) -> str:
+    parts = []
+    if new_items:
+        label = "新公告" if any(it["kind"] == "公告" for it in new_items) else "新内容"
+        first = new_items[0]["title"]
+        more = f" 等{len(new_items)}条" if len(new_items) > 1 else ""
+        parts.append(f"【{label}】{first}{more}")
+    if changes:
+        if len(changes) == 1:
+            parts.append(f"【公告有改动·第{changes[0]['count']}次】{changes[0]['item']['title']}")
+        else:
+            parts.append(f"【公告有改动】{len(changes)}篇公告有新改动")
+    return "；".join(parts)
 
 
 # ---------------------------------------------------------------- 主流程
@@ -241,30 +418,38 @@ def main():
         log(f"栏目分类首次接入，已静默记录 {added} 条历史内容，不提醒。")
 
     new_items = [it for it in items if it["id"] not in seen]
-    if not new_items:
-        log("没有新内容。")
+    changes, body_state = collect_body_changes(announcements)
+
+    if not new_items and not changes:
+        if save_body_state(body_state):
+            log("正文指纹账本已更新。")
+        log("没有新内容，也没有公告改动。")
         ping_ok()
         return
 
     new_items.sort(key=lambda x: x["time"], reverse=True)
+    changes.sort(key=lambda ch: ch["item"]["time"], reverse=True)
     for it in new_items:
         log(f"★ 新{it['kind']}：{it['title']}  {it['time']}")
         log(f"   链接：{it['url']}")
+    for ch in changes:
+        log(f"✎ 到期改动提醒（第{ch['count']}次）：{ch['item']['title']}  {ch['item']['time']}")
 
-    titles = [it["title"] for it in new_items]
-    label = "新公告" if any(it["kind"] == "公告" for it in new_items) else "新内容"
-    subject = f"万象棋{label}：{titles[0]}" + (f" 等{len(new_items)}条" if len(new_items) > 1 else "")
+    subject = build_subject(new_items, changes)
     try:
-        send_email(subject, build_email_html(new_items))
+        send_email(subject, build_email_html(new_items, changes))
         log(f"提醒邮件已发送至 {os.environ['TO_ADDRS']}")
     except Exception as ex:
         log(f"邮件发送失败：{ex}（内容不入账，下次运行自动重试）")
         sys.exit(1)
 
-    for it in new_items:
-        seen[it["id"]] = it["title"]
-    save_seen(seen)
-    log("账本已更新，workflow 将自动提交回仓库。")
+    if new_items:
+        for it in new_items:
+            seen[it["id"]] = it["title"]
+        save_seen(seen)
+        log("新内容已入账，workflow 将自动提交回仓库。")
+    if save_body_state(body_state):
+        log("正文指纹账本已更新，workflow 将自动提交回仓库。")
     ping_ok()
 
 
