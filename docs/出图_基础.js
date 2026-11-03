@@ -84,6 +84,9 @@ const MARK_OPEN = '【新增】';
 const MARK_CLOSE = '【/新增】';
 const VAL_OPEN = '【改】';
 const VAL_CLOSE = '【/改】';
+/* 整段被删掉的内容：画成灰色 + 删除线 */
+const DEL_OPEN = '【删】';
+const DEL_CLOSE = '【/删】';
 /* 图标字体的私用区字符（U+E000–U+F8FF）与解码残留（U+FFFD），
    我们的字体没有对应字形，只会画成方块，绘制前统一丢掉 */
 const ICON_CHARS = /[\uE000-\uF8FF\uFFFD]/g;
@@ -94,15 +97,17 @@ function stripMarks(text) {
     .split(MARK_CLOSE).join('')
     .split(VAL_OPEN).join('')
     .split(VAL_CLOSE).join('')
+    .split(DEL_OPEN).join('')
+    .split(DEL_CLOSE).join('')
     .replace(ICON_CHARS, '');
 }
 
-/* 剥离标记 → { plain, spans（新增）, vals（数值变化） }，区间都基于 plain */
+/* 剥离标记 → { plain, spans（新增）, vals（数值变化）, dels（整段删除） }，区间都基于 plain */
 function parseMarks(text) {
   const s = String(text == null ? '' : text).replace(ICON_CHARS, '');
   const buf = [];
-  const spans = [], vals = [];
-  let open = -1, openV = -1, i = 0;
+  const spans = [], vals = [], dels = [];
+  let open = -1, openV = -1, openD = -1, i = 0;
   while (i < s.length) {
     if (s.startsWith(MARK_OPEN, i)) {
       if (open < 0) open = buf.length;
@@ -124,13 +129,93 @@ function parseMarks(text) {
       i += VAL_CLOSE.length;
       continue;
     }
+    if (s.startsWith(DEL_OPEN, i)) {
+      if (openD < 0) openD = buf.length;
+      i += DEL_OPEN.length;
+      continue;
+    }
+    if (s.startsWith(DEL_CLOSE, i)) {
+      if (openD >= 0) { dels.push([openD, buf.length]); openD = -1; }
+      i += DEL_CLOSE.length;
+      continue;
+    }
     buf.push(s[i]);
     i++;
   }
   /* 漏写结束标记时，从开始标记一直着色到结尾，避免整段失去标记 */
   if (open >= 0) spans.push([open, buf.length]);
   if (openV >= 0) vals.push([openV, buf.length]);
-  return { plain: buf.join(''), spans, vals };
+  if (openD >= 0) dels.push([openD, buf.length]);
+  return { plain: buf.join(''), spans, vals, dels };
+}
+
+/* 人工标金：把输入框里选中的一段文字包成【改】…【/改】（和自动标金同一种金色）。
+   选中的文字整段已经在【改】里，再点一次就取消。
+   ss/se 是输入框原文（含标记字符）的下标，内部先换算成纯文本下标。
+   返回 { text, start, end }：新文本 + 标金后该段文字在新文本里的下标，供还原选区 */
+function toggleValMarks(raw, ss, se) {
+  const s = String(raw == null ? '' : raw);
+  const S = Math.max(0, Math.min(ss, se)), E = Math.max(ss, se);
+  const plain = [], keep = [], toPlain = [];
+  const TOK = [MARK_OPEN, MARK_CLOSE, DEL_OPEN, DEL_CLOSE, VAL_OPEN, VAL_CLOSE];
+  let pi = 0, i = 0;
+  while (i < s.length) {
+    const tok = TOK.find(t => s.startsWith(t, i));
+    if (tok) {
+      /* 标记字符本身也显示在输入框里，选择边界可能落在标记中间：贴到标记起点 */
+      for (let k = 0; k < tok.length; k++) toPlain[i + k] = pi;
+      if (tok !== VAL_OPEN && tok !== VAL_CLOSE) keep.push({ pos: pi, text: tok });
+      i += tok.length;
+      continue;
+    }
+    toPlain[i] = pi;
+    plain.push(s[i]);
+    pi++; i++;
+  }
+  toPlain[s.length] = pi;
+  const ps = toPlain[S] == null ? pi : toPlain[S];
+  const pe = toPlain[E] == null ? pi : toPlain[E];
+  if (pe <= ps) return { text: s, start: S, end: E };
+
+  const vals = parseMarks(s).vals.slice();
+  const hit = vals.find(([a, b]) => ps >= a && pe <= b);
+  let ranges;
+  if (hit) {
+    /* 选中整段已有的金色 → 取消；只选中一部分则保留原段，按新增处理 */
+    ranges = vals.filter(r => r !== hit);
+  } else {
+    ranges = vals.concat([[ps, pe]])
+      .sort((x, y) => x[0] - y[0])
+      .reduce((out, r) => {
+        const last = out[out.length - 1];
+        if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]);
+        else out.push([r[0], r[1]]);
+        return out;
+      }, []);
+  }
+
+  /* 其他标记（新增 / 删除）留在原来的纯文本位置上，只重写【改】 */
+  const byPos = new Map();
+  keep.forEach(m => {
+    if (!byPos.has(m.pos)) byPos.set(m.pos, []);
+    byPos.get(m.pos).push(m.text);
+  });
+  const opens = new Map(), closes = new Map();
+  ranges.forEach(([a, b]) => {
+    opens.set(a, (opens.get(a) || 0) + 1);
+    closes.set(b, (closes.get(b) || 0) + 1);
+  });
+  let out = '';
+  const at = [];
+  for (let p = 0; p <= plain.length; p++) {
+    for (let k = 0; k < (closes.get(p) || 0); k++) out += VAL_CLOSE;
+    const ms = byPos.get(p);
+    if (ms) out += ms.join('');
+    for (let k = 0; k < (opens.get(p) || 0); k++) out += VAL_OPEN;
+    at[p] = out.length;
+    if (p < plain.length) out += plain[p];
+  }
+  return { text: out, start: at[ps], end: at[pe] };
 }
 
 /* 与 wrapText 相同的预处理：数字和量词之间不留空格、剥离新增标记 */
@@ -204,47 +289,51 @@ function lineRanges(s, lines) {
 
 /* 说明文字按「新增」/【改】数值标记绘制，换行结果与 wrapText 完全一致。
    数值标记可再垫一层底色（valBg），先铺背景再写字，避免遮住相邻文字 */
-function drawDescLines(ctx, lines, text, x, y, lh, base, hi, val, valBg) {
+function drawDescLines(ctx, lines, text, x, y, lh, base, hi, val, valBg, del) {
   const pr = descPrepared(text);
   const src = pr.plain;
   const spans = newSpans(src, pr.spans);
   const vals = pr.vals;
+  const dels = pr.dels;
   const cVal = val || hi;
+  const cDel = del || '#9a9a9a';
   const rgs = lineRanges(src, lines);
   const fsz = /(\d+(?:\.\d+)?)px/.exec(ctx.font);
   const fs = fsz ? parseFloat(fsz[1]) : Math.round(lh * 0.65);
   lines.forEach((l, n) => {
     const rg = rgs[n];
-    const mark = rg[0] >= 0 && (spans.length || vals.length);
+    const mark = rg[0] >= 0 && (spans.length || vals.length || dels.length);
     if (l) {
       if (!mark) {
         ctx.fillStyle = base;
         ctx.fillText(l, x, y);
       } else {
-        /* 先按「颜色 + 是否数值」切段 */
+        /* 先按「颜色 + 是否数值 + 是否删除」切段 */
         const runs = [];
-        let run = '', cur = null, curVal = false;
+        let run = '', cur = null, curVal = false, curDel = false;
         for (let k = 0; k < l.length; k++) {
           const gi = rg[0] + k;
           let col = spans.some(sp => gi >= sp[0] && gi < sp[1]) ? hi : base;
           const isVal = vals.some(v => gi >= v[0] && gi < v[1]);
           if (isVal) col = cVal;
-          if (cur === null) { cur = col; curVal = isVal; run = l[k]; }
-          else if (col === cur && isVal === curVal) run += l[k];
+          const isDel = dels.some(d => gi >= d[0] && gi < d[1]);
+          if (isDel) col = cDel;
+          if (cur === null) { cur = col; curVal = isVal; curDel = isDel; run = l[k]; }
+          else if (col === cur && isVal === curVal && isDel === curDel) run += l[k];
           else {
-            runs.push({ t: run, c: cur, v: curVal });
-            cur = col; curVal = isVal; run = l[k];
+            runs.push({ t: run, c: cur, v: curVal, d: curDel });
+            cur = col; curVal = isVal; curDel = isDel; run = l[k];
           }
         }
-        if (run) runs.push({ t: run, c: cur, v: curVal });
+        if (run) runs.push({ t: run, c: cur, v: curVal, d: curDel });
 
-        /* 数值段垫底色（左右各留一点内边距） */
+        /* 数值段垫底色（左右各留一点内边距）；已删除的段不垫 */
         if (valBg) {
           const px = fs * 0.10, py = fs * 0.10, bh = fs * 1.18, br = fs * 0.26;
           let bx = x;
           runs.forEach(r => {
             const w = ctx.measureText(r.t).width;
-            if (r.v) {
+            if (r.v && !r.d) {
               ctx.fillStyle = valBg;
               rr(ctx, bx - px, y - py, w + px * 2, bh, br);
               ctx.fill();
@@ -253,12 +342,21 @@ function drawDescLines(ctx, lines, text, x, y, lh, base, hi, val, valBg) {
           });
         }
 
-        /* 再写字 */
+        /* 再写字；删除段横划一道删除线 */
         let cx = x;
         runs.forEach(r => {
           ctx.fillStyle = r.c;
           ctx.fillText(r.t, cx, y);
-          cx += ctx.measureText(r.t).width;
+          const w = ctx.measureText(r.t).width;
+          if (r.d) {
+            ctx.strokeStyle = r.c;
+            ctx.lineWidth = Math.max(1, fs * 0.05);
+            ctx.beginPath();
+            ctx.moveTo(cx, y + fs * 0.56);
+            ctx.lineTo(cx + w, y + fs * 0.56);
+            ctx.stroke();
+          }
+          cx += w;
         });
       }
     }

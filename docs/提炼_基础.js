@@ -198,7 +198,10 @@ function md5(str) {
   return hex(a0) + hex(b0) + hex(c0) + hex(d0);
 }
 
-function loadNewsList(limit) {
+function loadNewsList(limit, attempt) {
+  /* 这个列表接口偶发断流（JSONP script 直接 onerror 或超时），失败就重试两次，
+     否则出图页的「最近公告」下拉会只剩「最近…」 */
+  const tryNo = attempt || 0;
   return new Promise((resolve, reject) => {
     const ts = String(Math.round(Date.now() / 1000));
     const sign = md5(LIST_SECRET + 'web_pc' + '389' + ts);
@@ -210,7 +213,7 @@ function loadNewsList(limit) {
     ].join('&');
     window.userobj = null;
     const sc = document.createElement('script');
-    sc.src = LIST_API + '?' + q;
+    sc.src = LIST_API + '?' + q + '&_=' + Date.now();
     let done = false;
     const timer = setTimeout(() => finish(new Error('公告列表请求超时')), 15000);
     function finish(err, val) {
@@ -218,6 +221,11 @@ function loadNewsList(limit) {
       done = true;
       clearTimeout(timer);
       sc.remove();
+      if (err && tryNo < 2) {
+        /* 重试间隔要跨过一秒：time 参与签名，同一秒内重试会和上次拿到同一份坏缓存 */
+        setTimeout(() => { loadNewsList(limit, tryNo + 1).then(resolve, reject); }, 1200 * (tryNo + 1));
+        return;
+      }
       err ? reject(err) : resolve(val);
     }
     sc.onload = () => {

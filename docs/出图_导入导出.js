@@ -520,6 +520,7 @@ async function localFillFromUrl() {
 }
 
 /* 最近几篇公告的下拉：问藏着的提炼页要一份列表（双击本地也能用，走 postMessage） */
+const RECENT_KEY = 'wxq-recent-v1';
 function loadRecentList() {
   const sel = document.getElementById('recentSel');
   if (!sel) return;
@@ -535,7 +536,16 @@ function loadRecentList() {
     clearTimeout(timer);
     window.removeEventListener('message', onMsg);
     frame.remove();
-    (list || []).forEach(it => {
+    /* 列表可能被再次拉取，先清掉旧的，避免同一个公告出现两遍 */
+    while (sel.options.length > 1) sel.remove(1);
+    /* 接口偶发只回裸 JSON（JSONP 执行失败），这时退回上次成功拉到的列表，别让下拉空着 */
+    let items = list || [];
+    if (items.length) {
+      try { localStorage.setItem(RECENT_KEY, JSON.stringify(items)); } catch (_) {}
+    } else {
+      try { items = JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch (_) { items = []; }
+    }
+    items.forEach(it => {
       const op = document.createElement('option');
       op.value = it.id;
       op.textContent = String(it.title || it.id).slice(0, 18);

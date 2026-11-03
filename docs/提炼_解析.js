@@ -42,6 +42,10 @@ const NOT_NAME_RE = /^(调整前|调整后|觉醒前|觉醒后|改动前|改动�
 /* 结构标签：「调整前 / 调整后 / 觉醒前 / 觉醒后」这类行只是上一条的对照正文，
    加粗了也不能当条目名，否则「调整后」的新内容会被拆成一张独立卡，上一条只剩旧值 */
 const STRUCT_LABEL_RE = /^(调整|觉醒|改动|修改)[前后](?:[：:]|$)/;
+/* 英雄条目下面的小节标签（「技能调整 / 技能强化 / 卡牌效果调整」）：
+   它们和「调整前/调整后」一样属于上一条的正文，不能另起一张卡，
+   否则马可波罗的卡牌效果和技能调整会被拆成两张（技能调整变卡名） */
+const SUB_SECTION_RE = /^(技能|卡牌效果|天赋|基础技能|被动技能|主动技能|技能效果|专属|秘技)(调整|强化|效果调整)$/;
 const SHORT_RE = /^(?:[\u4e00-\u9fa5]{1,14}|[\u4e00-\u9fa5A-Za-z0-9·\-\s]{2,14})$/;
 /* 允许带冒号的短名，如「技能突破：亚瑟」，否则会被误并入说明 */
 const NAME_LINE_RE = /^[\u4e00-\u9fa5A-Za-z0-9·\-\s：:]{2,16}$/;
@@ -67,7 +71,7 @@ function looksLikeItemName(t) {
   if (tc && TALENT_HEAD_RE.test(tc[1])) return !NOT_NAME_RE.test(t);
   if (!ITEM_NAME_CH_RE.test(t)) return false;
   if (NOT_NAME_RE.test(t) || TIER_LABEL_RE.test(t) || ATTR_HEAD_RE.test(t)) return false;
-  if (ACTION_HEAD_RE.test(t) || SUB_RE.test(t)) return false;
+  if (ACTION_HEAD_RE.test(t) || SUB_RE.test(t) || SUB_SECTION_RE.test(t)) return false;
   return true;
 }
 /* 以「以下 / 本次」这类词开头的短句是正文引导语，不是条目名 */
@@ -79,7 +83,7 @@ function looksLikeEndingName(t) {
   if (!s || s.length > 14) return false;
   if (!ITEM_NAME_CH_RE.test(s)) return false;
   if (NOT_NAME_RE.test(s) || NOT_HEAD_RE.test(s)) return false;
-  if (ACTION_HEAD_RE.test(s) || TIER_LABEL_RE.test(s)) return false;
+  if (ACTION_HEAD_RE.test(s) || TIER_LABEL_RE.test(s) || SUB_SECTION_RE.test(s)) return false;
   return SUB_RE.test(s);
 }
 
@@ -109,7 +113,7 @@ function lexLookup(s) { return LEX_INDEX.get(lexNorm(s)) || null; }
 function isStartLine(lines, i) {
   const l = lines[i];
   /* 结构标签永远不是条目名（加粗也一样）：它们是上一条的对照正文 */
-  if (STRUCT_LABEL_RE.test(l.text.trim())) return false;
+  if (STRUCT_LABEL_RE.test(l.text.trim()) || SUB_SECTION_RE.test(l.text.trim())) return false;
   if (l.bold) return true;
   if (i === 0) return true;
   const prev = lines[i - 1];
@@ -353,6 +357,9 @@ function sentences(s) {
 /* 前后改动很大的两版：整句对整句输出，不压缩。用不可见字符包起来，
    buildDesc 看到就不再标金（两侧一字不差地抄着，标了反而像只改了个数） */
 const BIG_OPEN = '\uE002', BIG_CLOSE = '\uE003';
+/* 整段被删掉的内容（调整后这半边没有对应文字）：出图端画成灰色删除线，
+   比「旧值 → 删除」更直白，也不会读成「这个值变成了『删除』」 */
+const DEL_OPEN = '【删】', DEL_CLOSE = '【/删】';
 /* 判定标准：开头 + 结尾能对上的不到两成，中间要重写超过 20 个字，两版长度相近。
    整句追加/删除（一侧完全罩住另一侧）、长度差四成以上的（多半是追加）都不算；
    两个分句内容调换（春风化雨）正好落在这条线上 */

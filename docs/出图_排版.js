@@ -27,6 +27,8 @@ function theme(o) {
     itTitle: '#111111', itDesc: '#555555', itNew: '#c8801a', itBullet: null, itRule: null,
     /* 数值变化（【改】标记）：统一金色 + 浅金底 */
     itVal: '#b07800', itValBg: '#f8e7bb',
+    /* 被整段删除（【删】标记）：灰字 + 删除线 */
+    itDel: '#9a9a9a',
     /* 署名 */
     footS: 0.032, footColor: '#888888'
   }, o || {});
@@ -229,7 +231,7 @@ function paintFlow(ctx, cfg, scale, oy, T) {
     }
     if (km.kdl.length) {
       setFont(ctx, itS, 400);
-      yy = drawDescLines(ctx, km.kdl, km.kd, x + km.dInd, yy, itLh, T.itDesc, T.itNew, T.itVal, T.itValBg);
+      yy = drawDescLines(ctx, km.kdl, km.kd, x + km.dInd, yy, itLh, T.itDesc, T.itNew, T.itVal, T.itValBg, T.itDel);
     }
     return yy;
   };
@@ -653,7 +655,7 @@ function paintFlow(ctx, cfg, scale, oy, T) {
     }
     if (dl.length) {
       setFont(ctx, itS, 400);
-      yy = drawDescLines(ctx, dl, splitAwaken(c.it.d), tx, yy, itLh, T.itDesc, T.itNew, T.itVal, T.itValBg);
+      yy = drawDescLines(ctx, dl, splitAwaken(c.it.d), tx, yy, itLh, T.itDesc, T.itNew, T.itVal, T.itValBg, T.itDel);
     }
     if (mt.kms.length) {
       if (sl.length || dl.length) yy += mt.kgap;
@@ -791,7 +793,7 @@ function paintFlow(ctx, cfg, scale, oy, T) {
           setFont(ctx, itS, 400);
           const dt = splitAwaken(c.it.d);
           const hadText = !!String(c.it.t || '').trim() || !!dt;
-          if (dt) yy = drawDescLines(ctx, wrapText(ctx, dt, twx), dt, tx, yy, itLh, T.itDesc, T.itNew, T.itVal, T.itValBg);
+          if (dt) yy = drawDescLines(ctx, wrapText(ctx, dt, twx), dt, tx, yy, itLh, T.itDesc, T.itNew, T.itVal, T.itValBg, T.itDel);
           const kms = measureKids(c.it, twx);
           if (kms.length) {
             if (hadText) yy += Math.round(kidGapY * 1.2);

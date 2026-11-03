@@ -247,6 +247,44 @@ elSections.addEventListener('input', e => {
   scheduleRender();
 });
 
+/* ---------- 人工标金：在说明框里选中一段文字 → 点顶部「标金」 ----------
+   自动标金只标数字，整句话有歧义时人工补标；用的还是【改】标记，颜色与数字一致。
+   再点一次（选中同一段）就是取消。表格说明、标题不参与：标题绘制时会剥掉标记 */
+let markTarget = null;
+elSections.addEventListener('focusin', e => {
+  const t = e.target;
+  markTarget = (t.matches && t.matches('textarea.id, textarea.kd')) ? t : null;
+});
+let markTipTimer = 0;
+function markTip(msg) {
+  const btn = document.getElementById('btnGold');
+  if (!btn) return;
+  if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+  clearTimeout(markTipTimer);
+  btn.textContent = msg;
+  markTipTimer = setTimeout(() => { btn.textContent = btn.dataset.label; }, 1400);
+}
+const elBtnGold = document.getElementById('btnGold');
+if (elBtnGold) {
+  /* 按下时不让输入框失焦，选区和焦点都保住 */
+  elBtnGold.addEventListener('mousedown', e => e.preventDefault());
+  elBtnGold.addEventListener('click', () => {
+    const act = document.activeElement;
+    const t = (act && act.matches && act.matches('textarea.id, textarea.kd'))
+      ? act : markTarget;
+    if (!t || !t.isConnected) { markTip('先选中文字'); return; }
+    const ss = t.selectionStart, se = t.selectionEnd;
+    if (se <= ss) { markTip('先选中文字'); return; }
+    const r = toggleValMarks(t.value, ss, se);
+    if (r.text === t.value) return;
+    t.value = r.text;
+    t.dispatchEvent(new Event('input', { bubbles: true }));
+    /* 标记字符让下标变长，选区落回那段文字上，方便接着改 */
+    t.focus();
+    t.setSelectionRange(r.start, r.end);
+  });
+}
+
 /* 按钮：增删 */
 elSections.addEventListener('click', e => {
   const btn = e.target.closest('[data-act]'); if (!btn) return;
@@ -562,9 +600,26 @@ function srcFrameDoc(html) {
     + '</div></div></body></html>';
 }
 
+/* 上次渲染的原文签名：编辑左边时 render() 会反复调用这里，
+   内容没变就不再重建 iframe，否则右侧原文每次都会被拉回最上面 */
+let srcPanelSig = null;
+
 function updateSrcPanel() {
   if (!elSrcBody) return;
   const html = String(state.rawHtml || '').trim();
+  /* 没抓整篇 HTML 时用纯文本 / 各条原句兜底 */
+  let text = String(state.rawText || '').trim();
+  if (!html && !text) {
+    const out = [];
+    (state.sections || []).forEach(sec => (sec.groups || []).forEach(g => (g.items || []).forEach(it => {
+      const s = String(it.src || '').trim();
+      if (s) out.push(s);
+    })));
+    text = out.join('\n');
+  }
+  const sig = html ? 'h:' + html : 't:' + text;
+  if (sig === srcPanelSig) return;
+  srcPanelSig = sig;
   if (html) {
     elSrcBody.classList.add('hasFrame');
     elSrcBody.innerHTML = '';
@@ -578,15 +633,6 @@ function updateSrcPanel() {
     return;
   }
   elSrcBody.classList.remove('hasFrame');
-  let text = String(state.rawText || '').trim();
-  if (!text) {
-    const out = [];
-    (state.sections || []).forEach(sec => (sec.groups || []).forEach(g => (g.items || []).forEach(it => {
-      const s = String(it.src || '').trim();
-      if (s) out.push(s);
-    })));
-    text = out.join('\n');
-  }
   if (!text) {
     elSrcBody.innerHTML = '<div class="srcEmpty">还没有原文。导入整篇 JSON、或按公告编号自动填充后，这里会显示整篇公告原文。</div>';
     if (elSrcInfo) elSrcInfo.textContent = '';

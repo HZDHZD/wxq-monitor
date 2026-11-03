@@ -289,8 +289,8 @@ function paginateBalanced(base, units, scale, painter, ctx, startNo = 0) {
     return { h: r.bottom - r.top, cap: r.safe - r.top };
   };
   const capB = probe([], true).cap;
-  /* 尾页达到 30% 容量就算正常，保持贪心结果 */
-  if (probe(greedy[n - 1], true).h >= capB * 0.3) return greedy;
+  /* 尾页达到 20% 容量就算正常，保持贪心结果 */
+  if (probe(greedy[n - 1], true).h >= capB * 0.2) return greedy;
 
   /* 页尾不能落在章节头/分组头/子标题/只有标题的条目上 */
   const canEnd = (u) => {
@@ -308,7 +308,7 @@ function paginateBalanced(base, units, scale, painter, ctx, startNo = 0) {
   /* 从上一页尾部搬 m 条到尾页，取两页填充率中较低者最大的方案：
      尾页不至于只剩一小块，上一页也不会被摊得太空。
      上一页低于 40% 或尾页溢出时停止（m 再大只会更糟） */
-  let best = null, bestFill = 0.3;
+  let best = null, bestFill = 0.2;
   for (let m = 1; m < prev.length; m++) {
     const a = prev.slice(0, prev.length - m);
     if (!canEnd(a[a.length - 1])) continue;
@@ -357,10 +357,10 @@ function buildPages(ctx, base, scale, painter) {
   return pages;
 }
 
-/* 每套（不含封面）固定三页：字号从用户设定值往上试，找到「前两页排满、末页至少 30%」
+/* 每套（不含封面）固定三页：字号从用户设定值往上试，找到「前两页排满、末页至少 20%」
    的第一档就用它——不为了把最后一页也塞满而继续放大。
-   判据：仍为三页、内容不溢出、除末页外每页 ≥ 90%、末页 ≥ 30%。
-   没有一档同时满足时，取「前两页填充率里较低的那页最高」的档位（末页仍需 ≥30%）；
+   判据：仍为三页、内容不溢出、除末页外每页 ≥ 70%、末页 ≥ 20%。
+   没有一档同时满足时，取「前两页填充率里较低的那页最高」的档位（末页仍需 ≥20%）；
    这样至少不会为了末页把前面的页撑空。到 300% 仍凑不满三页则保持用户字号。
    放大到某档时允许棋手卡拆成「（续）」跨页，但优先选不拆卡的档位 */
 /* 上次选中的字号：改几个字时先用它排一遍，合格就直接用。
@@ -376,14 +376,14 @@ function fitSetPages(ctx, base, painter, scale, memoKey) {
   const hasSplit = arr => arr.some(p => (p.cfg.sections || []).some(sec =>
     (sec.groups || []).some(g => (g.items || []).some(it =>
       it.splitHead || it.splitTail || it.tblCont))));
-  const lastOk = arr => arr.length === MAX && !overflow(arr) && arr[MAX - 1].fill >= 0.30;
-  const fullOk = arr => arr.slice(0, -1).every(p => p.fill >= 0.90);
+  const lastOk = arr => arr.length === MAX && !overflow(arr) && arr[MAX - 1].fill >= 0.20;
+  const fullOk = arr => arr.slice(0, -1).every(p => p.fill >= 0.70);
   const memo = memoKey ? fitMemo[memoKey] : null;
   if (memo && memo.base === scale) {
     if (memo.mode === 'fit') {
       const pgs = build(memo.scale);
       /* 仍排成三页、不溢出、末页不空：就沿用上次的字号，不重找
-         （不要求前两页 ≥90%：上次就是从「最均衡」那档选出来的，改几个字不该让字号跳档） */
+         （不要求前两页 ≥70%：上次就是从「最均衡」那档选出来的，改几个字不该让字号跳档） */
       if (pgs.length === MAX && !overflow(pgs) && lastOk(pgs) && !hasSplit(pgs)) return pgs;
       /* 内容改到这套字号不再合格：落到下面重新找档位 */
     } else {
@@ -421,7 +421,7 @@ function fitSetPages(ctx, base, painter, scale, memoKey) {
 
   let hit = null, hitSc = 0;
   let best = null, bestSc = 0, bestBal = -1;
-  /* ② 在上界内二分找第一个「前两页排满、末页至少 30%」的档（等价于原来的逐档找首个命中） */
+  /* ② 在上界内二分找第一个「前两页排满、末页至少 20%」的档（等价于原来的逐档找首个命中） */
   let a = p0, b = top, found = -1;
   while (a <= b) {
     const mid = (a + b) >> 1;
@@ -450,7 +450,7 @@ function fitSetPages(ctx, base, painter, scale, memoKey) {
       const sc = Math.round((pickSc - d * 0.01) * 100) / 100;
       if (sc < scale) break;
       const pgs = build(sc);
-      if (pgs.length === MAX && !overflow(pgs) && !hasSplit(pgs) && pgs[MAX - 1].fill >= 0.30) {
+      if (pgs.length === MAX && !overflow(pgs) && !hasSplit(pgs) && pgs[MAX - 1].fill >= 0.20) {
         if (memoKey) fitMemo[memoKey] = { base: scale, mode: 'fit', scale: sc };
         return pgs;
       }

@@ -14,6 +14,8 @@ function buildDescRaw(lines, verbatim) {
       .map(s => s.replace(/[；;]\s*$/, '').replace(/\s*(?:→|->)\s*/g, ' → '))
       /* 原文用「新增：…」说明整条都是新加的：和压缩模式一样标成新增色 */
       .map(s => {
+        if (/^[^：:\n]{0,10}新增机制[：:]/.test(s))
+          return '【新增】' + (s.replace(/[。！？]$/, '') + '。【/新增】');
         if (!/^新增[：:]\s*/.test(s)) return s;
         const body = s.replace(/^新增[：:]\s*/, '');
         if (!body) return '';
@@ -75,6 +77,12 @@ function buildDescRaw(lines, verbatim) {
     if (/^新增[：:]\s*/.test(body)) {
       body = body.replace(/^新增[：:]\s*/, '');
       return body ? '【新增】' + body + '（新增）【/新增】' + (/[。！？]$/.test(body) ? '' : '。') : '';
+    }
+    /* 「基础技能新增机制：…」整条都是新加的机制：整句标新增色。
+       原文自己已经写了「新增机制」，不再补「（新增）」，避免同一句里出现两次「新增」 */
+    if (/^[^：:\n]{0,10}新增机制[：:]/.test(body)) {
+      const b2 = /[。！？]$/.test(body) ? body : body + '。';
+      return '【新增】' + b2 + '【/新增】';
     }
     /* 以「）】【」结尾的句子同样是完整一句，必须补句号 */
     return body ? body + (/[。！？]$/.test(body) ? '' : '。') : '';
@@ -276,32 +284,86 @@ function markChangedVals(text, lines) {
   /* 左段数值是不是「被压缩省略的共有内容」，只查它对应的那个分句的调整后原文。
      查整段调整后会把别的分句里的同值算进来：海诺神杖的 150% 撞上子杖还写着的
      150%，于是被判成没变。两侧分句数一致时按分句配对，否则退回整档 */
-  const ctxs = [];
+  const ctxs = [], looseL = [], looseR = [];
   pairs.forEach(([b, a]) => {
     const bs = splitClauses(b), as = splitClauses(a);
+    /* 两侧全部分句都记下来：档位标签（「10级：」）配对时直接按标签找，
+       不受分句数是否对得齐影响 */
+    bs.forEach(x => looseL.push(x));
+    as.forEach(x => looseR.push(x));
     if (bs.length && bs.length === as.length) {
       const map = alignClauses(bs, as);
       bs.forEach((x, i) => ctxs.push({ l: x, r: as[map[i]] }));
     } else {
-      ctxs.push({ l: b, r: a });
+      /* 分句数对不齐（多档段落里各档的逗号数量不同）：退到句号级配对。
+         否则整档原文只能当一整条上下文，相似度永远达不到门槛，
+         查不到「这句调整前」就只好拿整段调整后的数字来比，
+         武则天 10级「100+ → 80+」会被 100级 里的 100+ 吃掉，标不出来 */
+      const bss = splitSentences(b).map(x => x.t), ass = splitSentences(a).map(x => x.t);
+      if (bss.length > 1 && bss.length === ass.length) {
+        const map = alignClauses(bss, ass);
+        bss.forEach((x, i) => ctxs.push({ l: x, r: ass[map[i]] }));
+      }
+      /* 连句数也对不上（一侧多一句衰减说明）：ctxs 为空，查上下文时
+         直接按相似度在 looseL / looseR 里找最像的一句 */
     }
   });
-  const ctxRight = segTxt => {
-    let best = null, bestSc = 0;
-    ctxs.forEach(c => {
-      const sc = clauseSim(segTxt, c.l);
-      if (sc > bestSc) { bestSc = sc; best = c; }
-    });
-    return bestSc >= 0.5 ? best.r : null;
+  const ctxRight = (segTxt, tier, tierTxt) => {
+    const pick = (list, txt) => {
+      let best = null, bestSc = 0;
+      list.forEach(x => {
+        const sc = clauseSim(txt, x);
+        if (sc > bestSc) { bestSc = sc; best = x; }
+      });
+      return { best, bestSc };
+    };
+    /* 同一档位（「10级：」）的调整后原文优先：档位行里的数值段很短，
+       靠相似度匹配不到原句，但档位标签能把它们对起来 */
+    if (tier) {
+      const same = looseR.filter(x => new RegExp('^' + tier + '[：:]').test(x));
+      if (same.length) {
+        const r = pick(same, tierTxt || segTxt);
+        if (r.bestSc >= 0.3) return r.best;
+      }
+    }
+    if (ctxs.length) {
+      let best = null, bestSc = 0;
+      ctxs.forEach(c => {
+        const sc = clauseSim(segTxt, c.l);
+        if (sc > bestSc) { bestSc = sc; best = c; }
+      });
+      return bestSc >= 0.5 ? best.r : null;
+    }
+    const r = pick(looseR, segTxt);
+    return r.bestSc >= 0.5 ? r.best : null;
   };
   /* 箭头右侧的分句要找的是同一对里的「调整前」，拿调整后的自己比永远相等 */
-  const ctxLeft = segTxt => {
-    let best = null, bestSc = 0;
-    ctxs.forEach(c => {
-      const sc = clauseSim(segTxt, c.r);
-      if (sc > bestSc) { bestSc = sc; best = c; }
-    });
-    return bestSc >= 0.5 ? best.l : null;
+  const ctxLeft = (segTxt, tier, tierTxt) => {
+    const pick = (list, txt) => {
+      let best = null, bestSc = 0;
+      list.forEach(x => {
+        const sc = clauseSim(txt, x);
+        if (sc > bestSc) { bestSc = sc; best = x; }
+      });
+      return { best, bestSc };
+    };
+    if (tier) {
+      const same = looseL.filter(x => new RegExp('^' + tier + '[：:]').test(x));
+      if (same.length) {
+        const r = pick(same, tierTxt || segTxt);
+        if (r.bestSc >= 0.3) return r.best;
+      }
+    }
+    if (ctxs.length) {
+      let best = null, bestSc = 0;
+      ctxs.forEach(c => {
+        const sc = clauseSim(segTxt, c.r);
+        if (sc > bestSc) { bestSc = sc; best = c; }
+      });
+      return bestSc >= 0.5 ? best.l : null;
+    }
+    const r = pick(looseL, segTxt);
+    return r.bestSc >= 0.5 ? r.best : null;
   };
   if (t.indexOf('→') < 0) return t.split(BIG_OPEN).join('').split(BIG_CLOSE).join('');
   /* 箭头两侧各自划段比较：默认只跟紧挨箭头的那一个分句比，避免同一句里别处
@@ -337,7 +399,11 @@ function markChangedVals(text, lines) {
       if (rr0) { ra = rr0.a; rb = rr0.b; }
     }
     const lt = t.slice(la, lb), rt = t.slice(ra, rb);
-    const lr = ctxRight(lt);
+    const tier = tierAt(la);
+    /* 档位行（「10级：」）里数值段被截成了一小串「100+100%」，
+       拿它去比相似度匹配不到原句；带上档位前缀再查 */
+    const seenTxt = tier ? t.slice(lineStart(la), lb) : lt;
+    const lr = ctxRight(lt, tier, tier ? seenTxt : null);
     const ln = descNums(lt), lr2 = descArrs(lt), rn = descNums(rt), rr2 = descArrs(rt);
     segs.push({ a: la, b: lb, side: 'L', num: ln, arr: lr2, otherNum: rn, otherArr: rr2,
       afterNum: lr === null ? rn : descNums(lr), afterArr: lr === null ? rr2 : descArrs(lr) });
@@ -346,6 +412,11 @@ function markChangedVals(text, lines) {
   };
   const lineStart = p => { let i = p; while (i > 0 && !/[。！？\n]/.test(t[i - 1])) i--; return i; };
   const lineEnd = p => { let i = p; while (i < t.length && !/[。！？\n]/.test(t[i])) i++; return i; };
+  /* 当前数值所在那一行的档位标签（「10级：」）：同一档位才能互相参照 */
+  const tierAt = p => {
+    const m = t.slice(lineStart(p), p + 24).match(/^([0-9]{1,3}级|基础技能|被动技能|主动技能|专属|秘技)[：:]/);
+    return m ? m[1] : '';
+  };
   /* 把一段原文按逗号/分号切成小分句，返回字符区间；括号里的标点不切 */
   const spans = (s0, s1) => {
     const out = [];
@@ -435,6 +506,17 @@ function markChangedVals(text, lines) {
     oi = c + NEW_C.length;
   }
   const inNew = p => nov.some(r => p >= r[0] && p < r[1]);
+  /* 整段被删掉的内容（【删】…【/删】）出图端已经画灰加删除线，
+     里面的数字不再标金，否则一截灰字里冒出金色反而更乱 */
+  const dels = [];
+  let di = 0;
+  while ((di = t.indexOf(DEL_OPEN, di)) >= 0) {
+    const dc = t.indexOf(DEL_CLOSE, di);
+    if (dc < 0) { dels.push([di, t.length]); break; }
+    dels.push([di, dc + DEL_CLOSE.length]);
+    di = dc + DEL_CLOSE.length;
+  }
+  const inDel = p => dels.some(r => p >= r[0] && p < r[1]);
   const marks = [];
   const re = new RegExp(VAL_ARR_SRC + '|' + VAL_NUM_SRC, 'g');
   let m;
@@ -446,7 +528,13 @@ function markChangedVals(text, lines) {
     let mark = false;
     /* 「40级：」「100级：」「10级技能：」是档位标签，不是数值，
        跨分句配对时别把它当成变化 */
-    if (!inBig(pos) && !inNew(pos) && !/^\s*级[^\n。，；]{0,6}[：:]/.test(t.slice(pos + tok.length))) {
+    /* 「6级天赋现在会计算…」这种等级称谓写在调整前/后之外，
+       它只是说明对象，不是被改的数值；不查另一档里的同值来标 */
+    const tierHead = /^[0-9]+(?:\.[0-9]+)?$/.test(tok)
+      && /^级[\u4e00-\u9fa5]/.test(t.slice(pos + tok.length))
+      && (pos === 0 || /[。；，、：\n]/.test(t[pos - 1]))
+      && !segAt(pos);
+    if (!inBig(pos) && !inNew(pos) && !inDel(pos) && !tierHead && !/^\s*级[^\n。，；]{0,6}[：:]/.test(t.slice(pos + tok.length))) {
       const sg = segAt(pos);
       if (sg && sg.otherNum) {
         /* 左段的数字：右侧同一箭头里也写了、或它对应的那句调整后原文里本来就有
@@ -454,7 +542,7 @@ function markChangedVals(text, lines) {
            右侧同理：两侧共有的句尾只写一次、落在箭头后面时，左段里就没有它，
            回「调整前」原文那一句里查一次（西施「…并眩晕周围的敌方单位2秒」两侧都没变） */
         const hit = x => (isArr ? x.has(tok) : numHit(x, key, isComp));
-        const coR = (sg.side === 'R' && ctxs.length) ? ctxLeft(clauseAt(pos)) : null;
+        const coR = sg.side === 'R' ? ctxLeft(clauseAt(pos), tierAt(pos)) : null;
         /* 「10级：」这种档位标签不是数值，别拿它当「左侧本来就有这个数」 */
         const after = sg.side === 'R'
           ? (coR === null ? null
@@ -467,9 +555,7 @@ function markChangedVals(text, lines) {
            自己这句话对应的调整后原文、右侧找调整前，再比。拿整档文本比会被
            别处写着的同值吃掉，10级：30+100% 会把主技能的 100% 判成没变 */
         const cl = clauseAt(pos);
-        const co = ctxs.length
-          ? (sideAt(pos) === 'R' ? ctxLeft(cl) : ctxRight(cl))
-          : null;
+        const co = sideAt(pos) === 'R' ? ctxLeft(cl, tierAt(pos)) : ctxRight(cl, tierAt(pos));
         if (co !== null) {
           mark = isArr ? !descArrs(co).has(tok) : !numHit(descNums(co), key, isComp);
         } else {

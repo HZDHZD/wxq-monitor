@@ -1,4 +1,14 @@
 /* 本文件由 公告提炼.html 拆出，按函数名定位（行号会漂移） */
+/* 两段文字共有的最长开头 / 结尾字数（结尾不越过开头已经共有的部分） */
+function sharedEdge(x, y) {
+  const mn = Math.min(x.length, y.length);
+  let p = 0;
+  while (p < mn && x[p] === y[p]) p++;
+  let s = 0;
+  while (s < mn - p && x[x.length - 1 - s] === y[y.length - 1 - s]) s++;
+  return Math.max(p, s);
+}
+
 function compressPair(b, a) {
   b = b.trim(); a = a.trim();
   if (!b || !a || b === a) return b || a;
@@ -42,6 +52,23 @@ function compressPair(b, a) {
      箭头插进两条结构不同的句子中间。这种直接整句对整句，不共享任何片段 */
   const big = bigRewrite(b, a);
   if (big) return big;
+  /* 两侧按逗号切成同样多的小句（≥2）时逐小句对齐压缩：
+     一句话里并列两件事、中间那段又是两版共有的（机关秘术「机关匣不可叠穿，
+     故障机器人基础双抗10 → 可叠穿，…20」），整句箭头会把公共中段一起吞掉。
+     括号内的逗号不算分句点；两侧小句数不等说明结构不同，不做猜测。
+     每对变化的小句还要各自有 ≥2 字公共开头/结尾，才说明它们真是一一对应的，
+     只是逗号数凑巧相等的段落不按小句对齐 */
+  const bcs = splitClausesSep(b), acs = splitClausesSep(a);
+  if (bcs.length >= 2 && bcs.length === acs.length && !/\n/.test(b + a) &&
+      bcs.every((c, i) => c.t === acs[i].t || sharedEdge(c.t, acs[i].t) >= 2)) {
+    const out = [];
+    for (let i = 0; i < bcs.length; i++) {
+      const lb = bcs[i].t, la = acs[i].t;
+      const sep = i < bcs.length - 1 ? (bcs[i].sep || acs[i].sep || '，') : '';
+      out.push((lb === la ? lb : compressPair(lb, la)) + sep);
+    }
+    if (out.length) return out.join('');
+  }
   let p = 0;
   const n = Math.min(b.length, a.length);
   while (p < n && b[p] === a[p]) p++;
@@ -201,7 +228,13 @@ function compressPair(b, a) {
       (/[：:，,、]$/.test(bb) ? '' : (hasPred(b) ? '，且' : '，'));
     return bb + sep + '【新增】' + extra + '（新增）【/新增】' + (/[。！？]$/.test(b) ? '。' : '');
   }
-  if (!la) return b + ' → 删除';
+  /* 调整后这半边没有对应文字：整段算删除。公共前缀（「恢复生命值提升至80点」）
+     留在删除线外面，只把真正删掉的部分画灰加删除线 */
+  if (!la) {
+    const dm = lb.match(/^[，,。；;、：:\s]+/);
+    const dsep = dm ? dm[0] : '';
+    return pre + dsep + DEL_OPEN + lb.slice(dsep.length) + DEL_CLOSE + '（删除）';
+  }
   /* 已把上一并列项复制到右支，不再剥公共后缀，否则会剥成「吸血 → 生命恢复和护盾效果」 */
   if (conjDup) return pre + lb + ' → ' + ordPrefix + la;
   /* 两侧只有括号里的内容不同：压缩括号内部，避免出现「（至多20枚） → 30枚）」 */
@@ -337,6 +370,14 @@ function compressPair(b, a) {
        右边，左支读成「50%伤害减免和 →」（始祖熊灵
        「50%伤害减免和攻速 → 35%伤害减免和50%攻速」） */
     if (/(?:以及|和|与|及|、)$/.test(l) && !/(?:以及|和|与|及|、)$/.test(r)) return '';
+    /* 公共后缀正好从「回合 / 等级 / 生命值」这类单位词开头、而两侧都停在
+       「本 / 下 / 该 / 每」这类限定词末尾时（贷款协议「则本回合获得的能量-2 →
+       则下回合获得的能量-2」）：外层前缀已经吃掉了这个单位词，后缀又整段带着它，
+       剥完会读成「则本 → 结束时若能量为负，则下回合…」，把整段后缀补回箭头两侧 */
+    const uM = s.match(/^(?:回合|等级|星级|生命值|法力值|攻击力|法术攻击力|物理攻击力|双抗|护盾|能量|费用|冷却)/);
+    if (uM && pre.endsWith(uM[0]) && /[本下上该每前同]$/.test(l) && /[本下上该每前同]$/.test(r)) {
+      return pre + l + s.replace(/[。；;]\s*$/, '') + ' → ' + pre + r + s;
+    }
     /* 左侧残段以逗号收尾时（班叔「比赛开始时，获得1张便携式机关」），这个逗号是
        它和公共后缀之间的停顿；后缀被剥到箭头右侧后，逗号也要跟着过去，
        否则读成「比赛开始时， → 开局及棋手5级时获得1张便携式机关」 */
@@ -346,6 +387,9 @@ function compressPair(b, a) {
       sepMoved = '，';
     }
     const mid = compressPair(midL, r);
+    /* 左支停在「改为 / 变为」这类动词上时，后面的逗号是它和宾语的停顿，
+       跟着搬过来会读成「改为，获得1张高阶推演战术」（乘胜追击） */
+    if (sepMoved && /(?:改为|变为|改成|变成|调整为|提升为|下降为|转换为)$/.test(mid)) sepMoved = '';
     /* 公共后缀以连词开头时（西施「并眩晕周围的敌方单位2秒」），它同时修饰
        调整前后两版；紧跟右支会读成「只有调整后才有眩晕」，用逗号断开 */
     const tailSep = /^(?:并且|并|且|同时|还|以及|和|与|及|或)/.test(s) ? '，' : '';
@@ -638,6 +682,20 @@ function inlineDiff(bb, aa) {
   });
   if (ch) blocks.push(ch);
   if (eq) blocks.push({ eq });
+  /* LCS 有时把变化点切在词中间（四人同行「卡牌5选1 → 3-5阶英雄牌5选1」会切成
+     「卡 → 3-5阶英雄」+「牌5选1…」）：变化段一侧只剩一个汉字、另一侧是整词，
+     且后面紧跟着同一个汉字时，把这个汉字并进箭头两侧，读成「卡牌 → 3-5阶英雄牌」 */
+  for (let k = 0; k < blocks.length - 1; k++) {
+    const b0 = blocks[k], nb = blocks[k + 1];
+    if (b0.del === undefined || nb.eq === undefined) continue;
+    const one = b0.del.length === 1 ? b0.del : (b0.ins.length === 1 ? b0.ins : '');
+    const other = b0.del.length === 1 ? b0.ins : b0.del;
+    if (!one || !/^[\u4e00-\u9fa5]$/.test(one) || other.length < 2) continue;
+    if (!/^[\u4e00-\u9fa5]$/.test(nb.eq[0])) continue;
+    b0.del += nb.eq[0];
+    b0.ins += nb.eq[0];
+    nb.eq = nb.eq.slice(1);
+  }
   /* 变化段两侧各带一个并列连词（「并无敌」→「和70%伤害减免」）：右侧那个连着
      被换掉的那一项，没有并列对象，就地写出来会多一个「和」 */
   blocks.forEach(x => {
