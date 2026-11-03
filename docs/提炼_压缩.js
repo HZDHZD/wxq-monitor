@@ -726,6 +726,20 @@ function inlineDiff(bb, aa) {
     blocks.splice(k, 2);
     k -= 2;
   }
+  /* LCS 把两处数值变化对到一个共用汉字的两侧（冰心领域「场上品阶总数×0.35 →
+     场上5阶英雄数量×2」被切成「品 → 5阶」+「总数×0.35 → 英雄数量×2」）：
+     两侧变化都带数字、中间只隔 1-2 个汉字时，这个汉字只是碰巧对上，
+     并回同一个箭头，读成「品阶总数×0.35 → 5阶英雄数量×2」 */
+  for (let k = 1; k < blocks.length - 1; k++) {
+    const a1 = blocks[k - 1], gap = blocks[k], a2 = blocks[k + 1];
+    if (a1.del === undefined || a2.del === undefined || gap.eq === undefined) continue;
+    if (!/^[\u4e00-\u9fa5]{1,2}$/.test(gap.eq)) continue;
+    if (!/[0-9]/.test(a1.del + a1.ins) || !/[0-9]/.test(a2.del + a2.ins)) continue;
+    a1.del += gap.eq + a2.del;
+    a1.ins += gap.eq + a2.ins;
+    blocks.splice(k, 2);
+    k -= 2;
+  }
   const chs = blocks.filter(x => x.del !== undefined);
   if (!chs.length || chs.length > 3) return '';
   /* 句尾追加的新内容（「（不可叠加）」、多补的一句说明）：接在原句后面标成新增，
