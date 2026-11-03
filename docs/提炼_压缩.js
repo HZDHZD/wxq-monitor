@@ -61,13 +61,24 @@ function compressPair(b, a) {
   const bcs = splitClausesSep(b), acs = splitClausesSep(a);
   if (bcs.length >= 2 && bcs.length === acs.length && !/\n/.test(b + a) &&
       bcs.every((c, i) => c.t === acs[i].t || sharedEdge(c.t, acs[i].t) >= 2)) {
-    const out = [];
+    const parts = [];
     for (let i = 0; i < bcs.length; i++) {
       const lb = bcs[i].t, la = acs[i].t;
-      const sep = i < bcs.length - 1 ? (bcs[i].sep || acs[i].sep || '，') : '';
-      out.push((lb === la ? lb : compressPair(lb, la)) + sep);
+      /* 末尾小句也要带上它自己的句号/分号，否则整句的收尾标点会丢 */
+      const sep = i < bcs.length - 1
+        ? (bcs[i].sep || acs[i].sep || '，')
+        : (bcs[i].sep || acs[i].sep || '');
+      parts.push({ core: lb === la ? lb : compressPair(lb, la), sep });
     }
-    if (out.length) return out.join('');
+    if (parts.length) {
+      /* 一句里并排两个箭头时读不出「调整前/调整后」怎么对应：
+         每一对单独括起来（「（A → B），（C → D）」），仍是一个箭头对一个小句 */
+      const arrows = parts.filter((o) => o.core.includes(' → ')).length;
+      return parts.map((o) => {
+        const core = arrows >= 2 && o.core.includes(' → ') ? '（' + o.core + '）' : o.core;
+        return core + o.sep;
+      }).join('');
+    }
   }
   let p = 0;
   const n = Math.min(b.length, a.length);
