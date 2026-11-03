@@ -72,10 +72,11 @@ function compressPair(b, a) {
     }
     if (parts.length) {
       /* 一句里并排两个箭头时读不出「调整前/调整后」怎么对应：
-         每一对单独括起来（「（A → B），（C → D）」），仍是一个箭头对一个小句 */
+         每一对单独括起来（「[A → B]，[C → D]」），仍是一个箭头对一个小句。
+         用英文方括号，中文（）在这个工具里另有含义（新增说明/备注） */
       const arrows = parts.filter((o) => o.core.includes(' → ')).length;
       return parts.map((o) => {
-        const core = arrows >= 2 && o.core.includes(' → ') ? '（' + o.core + '）' : o.core;
+        const core = arrows >= 2 && o.core.includes(' → ') ? '[' + o.core + ']' : o.core;
         return core + o.sep;
       }).join('');
     }
