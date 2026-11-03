@@ -166,7 +166,10 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
       /* 只有确认是棋手（名单里的 lords）或下一行本身在名单里，才把下一行并进标题；
          棋手名查不到时下一行是正文（「秘技任务-海的拥抱 / 现在第1回合进度为1」） */
       const ownerLk = lexLookup(name);
-      if (!nx.bold && SHORT_RE.test(nx.text) && !NOT_NAME_RE.test(nx.text) && !/[。！？；：:]$/.test(nx.text)
+      /* 技能名自带中文引号（「“打扫战场”模块」）：引号和名单归一化时一样不算内容，
+         判「短名」前先去掉，否则会被当成正文并进上一条，模块名就丢了 */
+      const nxName = nx.text.replace(/[“”"「」『』‘’]/g, '');
+      if (!nx.bold && SHORT_RE.test(nxName) && !NOT_NAME_RE.test(nx.text) && !/[。！？；：:]$/.test(nx.text)
         && ((ownerLk && ownerLk.kind === 'lord') || !!lexLookup(nx.text.trim()))
         && !TIER_LABEL_RE.test(nx.text.trim())
         && !(flat && /[：:]/.test(nx.text))) {
