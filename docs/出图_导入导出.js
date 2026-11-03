@@ -274,6 +274,60 @@ async function dirHandleFor(root, path) {
   for (const seg of path.split('/').filter(Boolean)) d = await d.getDirectoryHandle(seg, { create: true });
   return d;
 }
+/* =======================  特殊库（小抄）  ======================= */
+/* 出图页新增条目 / 分组 / 技能时填的标题，导出图片时顺手写回项目根目录的 特殊库.js。
+   只在选到的目录里能读到 公告提炼.html 时才写，避免把文件写到别处 */
+async function saveSpecialLex(dir) {
+  if (!dir || !window.specialUsable || !window.specialKey) return 0;
+
+  const rawNames = [];
+  (state.sections || []).forEach(sec => (sec.groups || []).forEach(grp => {
+    if (grp.manual && grp.name) rawNames.push(grp.name);
+    (grp.items || []).forEach(it => {
+      if (it.manual && it.t) rawNames.push(it.t);
+      (it.kids || []).forEach(k => { if (k.manual && k.t) rawNames.push(k.t); });
+    });
+  }));
+  const names = rawNames.map(n => window.specialUsable(n)).filter(Boolean);
+  if (!names.length) return 0;
+
+  /* 只认项目根目录：目录里得有提炼页，否则宁可跳过也不乱写 */
+  try { await dir.getFileHandle('公告提炼.html'); } catch (_) { return 0; }
+
+  let list = Array.isArray(window.LEX_SPECIAL) ? window.LEX_SPECIAL.slice() : [];
+  try {
+    const fh = await dir.getFileHandle('特殊库.js');
+    const text = await (await fh.getFile()).text();
+    const m = text.match(/window\.LEX_SPECIAL\s*=\s*(\[[\s\S]*?\])\s*;/);
+    if (m) {
+      const fromFile = JSON.parse(m[1]);
+      if (Array.isArray(fromFile)) list = fromFile;
+    }
+  } catch (_) { /* 还没有这个文件，就用内存里的 */ }
+
+  const seen = new Set(list.map(n => window.specialKey(n)).filter(Boolean));
+  let added = 0;
+  names.forEach(n => {
+    const k = window.specialKey(n);
+    if (!k || seen.has(k)) return;
+    list.push(n);
+    seen.add(k);
+    added++;
+  });
+  if (!added) return 0;
+
+  const text = '/* ==== 特殊库：官方名单外的专有名词（模块 / 玩法 / 系统名） ====\n'
+    + '   出图页「新增条目 / 新增分组 / 新增技能」时填的标题会自动追加到这里；\n'
+    + '   公告提炼解析时，整行命中这里就按标题处理。\n'
+    + '   想删掉某个词，直接删数组里的那一行即可。 */\n'
+    + 'window.LEX_SPECIAL = ' + JSON.stringify(list, null, 2) + ';\n';
+  const fh = await dir.getFileHandle('特殊库.js', { create: true });
+  const w = await fh.createWritable();
+  await w.write(text);
+  await w.close();
+  window.LEX_SPECIAL = list;
+  return added;
+}
 /* =======================  导出水印  ======================= */
 /* 斜向平铺水印，参数沿用「加水印工具/watermark.py」：字体 40px、间距 294×212、
    倾角 28°、不透明度 34/255、深蓝 rgb(31,78,121)，按 1080×1440 为基准等比缩放。
@@ -396,7 +450,11 @@ async function doExport(choice) {
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
     }
-    btn.textContent = `已导出 ${total} 张`;
+    let lexAdded = 0;
+    if (dir) {
+      try { lexAdded = await saveSpecialLex(dir); } catch (e) { console.warn('特殊库写入失败', e); }
+    }
+    btn.textContent = `已导出 ${total} 张` + (lexAdded ? ` · 小抄 +${lexAdded}` : '');
     exportResetTimer = setTimeout(() => { btn.textContent = label; }, 1800);
   } catch (e) {
     console.error(e);

@@ -145,7 +145,7 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
          （「王中王匹配逻辑调整」+ 说明段落） */
       name = first.text.trim();
       rawName = name;
-    } else if (!flat && (lexLookup(first.text) || looksLikeItemName(first.text.trim()))) {
+    } else if (!flat && (lexLookup(first.text) || specialLookup(first.text) || looksLikeItemName(first.text.trim()))) {
       /* 名字没加粗的条目：先查官方名单（蒙恬 / 亚连 / 镜 / 蒙犽 / 苍、丢盔弃甲），
          查不到再退回「短名」判断 */
       name = first.text.trim();
@@ -169,8 +169,9 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
       /* 技能名自带中文引号（「“打扫战场”模块」）：引号和名单归一化时一样不算内容，
          判「短名」前先去掉，否则会被当成正文并进上一条，模块名就丢了 */
       const nxName = nx.text.replace(/[“”"「」『』‘’]/g, '');
-      if (!nx.bold && SHORT_RE.test(nxName) && !NOT_NAME_RE.test(nx.text) && !/[。！？；：:]$/.test(nx.text)
-        && ((ownerLk && ownerLk.kind === 'lord') || !!lexLookup(nx.text.trim()))
+      const nxSpecial = specialLookup(nx.text.trim());
+      if (!nx.bold && (SHORT_RE.test(nxName) || !!nxSpecial) && !NOT_NAME_RE.test(nx.text) && !/[。！？；：:]$/.test(nx.text)
+        && ((ownerLk && ownerLk.kind === 'lord') || !!lexLookup(nx.text.trim()) || !!nxSpecial)
         && !TIER_LABEL_RE.test(nx.text.trim())
         && !(flat && /[：:]/.test(nx.text))) {
         skill = nx.text;

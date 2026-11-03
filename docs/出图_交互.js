@@ -308,12 +308,12 @@ elSections.addEventListener('click', e => {
   else if (act === 'addGrp' && si >= 0) {
     /* 新分组要能看见，把章节展开 */
     folded.delete(state.sections[si]);
-    state.sections[si].groups.push({ name: '', items: [{ t: '', d: '' }] });
+    state.sections[si].groups.push({ name: '', manual: true, items: [{ t: '', d: '', manual: true }] });
   } else if (act === 'delGrp' && si >= 0 && gi >= 0) state.sections[si].groups.splice(gi, 1);
   else if (act === 'addItem' && si >= 0 && gi >= 0) {
     /* 新条目要能看见，把分组展开 */
     folded.delete(state.sections[si].groups[gi]);
-    state.sections[si].groups[gi].items.push({ t: '', d: '' });
+    state.sections[si].groups[gi].items.push({ t: '', d: '', manual: true });
   } else if (act === 'delItem' && si >= 0 && gi >= 0 && ii >= 0) state.sections[si].groups[gi].items.splice(ii, 1);
   else if (act === 'upSec' || act === 'downSec') {
     if (si < 0) return;
@@ -338,7 +338,7 @@ elSections.addEventListener('click', e => {
     if (si < 0 || gi < 0 || ii < 0) return;
     const item = state.sections[si].groups[gi].items[ii];
     if (!Array.isArray(item.kids)) item.kids = [];
-    if (act === 'addKid') item.kids.push({ t: '', d: '' });
+    if (act === 'addKid') item.kids.push({ t: '', d: '', manual: true });
     else if (ki < 0) return;
     else if (act === 'delKid') item.kids.splice(ki, 1);
     else {

@@ -110,10 +110,25 @@ const LEX_INDEX = (() => {
 })();
 function lexLookup(s) { return LEX_INDEX.get(lexNorm(s)) || null; }
 
+/* ====================  特殊库  ==================== */
+/* 官方名单外的模块 / 玩法 / 系统名，由出图页新增条目时记进 特殊库.js。
+   整行归一化后比对：只有整行就是这个词才算，正文里顺带提到不算 */
+const SPECIAL_INDEX = new Set(
+  ((window.LEX_SPECIAL || []))
+    .map(n => (window.specialKey ? window.specialKey(n) : ''))
+    .filter(Boolean)
+);
+function specialLookup(s) {
+  const k = window.specialKey ? window.specialKey(s) : '';
+  return k && SPECIAL_INDEX.has(k) ? { kind: 'special', name: k } : null;
+}
+
 function isStartLine(lines, i) {
   const l = lines[i];
   /* 结构标签永远不是条目名（加粗也一样）：它们是上一条的对照正文 */
   if (STRUCT_LABEL_RE.test(l.text.trim()) || SUB_SECTION_RE.test(l.text.trim())) return false;
+  /* 特殊库里确认过的专有名词，整行命中就直接当标题起头，不靠加粗猜 */
+  if (specialLookup(l.text)) return true;
   if (l.bold) return true;
   if (i === 0) return true;
   const prev = lines[i - 1];
