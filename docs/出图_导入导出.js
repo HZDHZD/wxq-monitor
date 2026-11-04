@@ -454,8 +454,8 @@ async function doExport(choice) {
     if (dir) {
       try { lexAdded = await saveSpecialLex(dir); } catch (e) { console.warn('特殊库写入失败', e); }
     }
-    btn.textContent = `已导出 ${total} 张` + (lexAdded ? ` · 小抄 +${lexAdded}` : '');
-    exportResetTimer = setTimeout(() => { btn.textContent = label; }, 1800);
+    btn.textContent = `已导出 ${total} 张` + (lexAdded ? ` · 小抄 +${lexAdded}（记得双击「同步到线上.bat」）` : '');
+    exportResetTimer = setTimeout(() => { btn.textContent = label; }, lexAdded ? 8000 : 1800);
   } catch (e) {
     console.error(e);
     btn.textContent = '导出失败';
