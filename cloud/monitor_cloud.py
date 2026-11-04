@@ -271,15 +271,19 @@ def collect_body_changes(announcements: list):
         st["title"] = it["title"]
         st.pop("last_push", None)
         if st["hash"] != digest:
-            st["count"] = int(st.get("count") or 0) + 1
-            st["hash"] = digest
-            lines = diff_lines(read_snapshot(it["id"]), text)
-            if lines:
-                # 冷却内的多次改动按顺序累加，提醒后清空
-                st["diff"] = ((st.get("diff") or []) + lines)[-DIFF_MAX_LINES:]
-            elif st.get("diff") is None:
-                st["diff"] = ["（没有上一版快照，无法显示本次差异；从下一次改动起可以对比）"]
-            log(f"✎ 正文有改动（第{st['count']}次）：{it['title']}  {it['time']}")
+            old_text = read_snapshot(it["id"])
+            if not old_text:
+                # 快照机制刚上线/缺快照：这一轮只补基线，不当作改动提醒
+                st["hash"] = digest
+                st["notified"] = digest
+            else:
+                st["count"] = int(st.get("count") or 0) + 1
+                st["hash"] = digest
+                lines = diff_lines(old_text, text)
+                if lines:
+                    # 冷却内的多次改动按顺序累加，提醒后清空
+                    st["diff"] = ((st.get("diff") or []) + lines)[-DIFF_MAX_LINES:]
+                log(f"✎ 正文有改动（第{st['count']}次）：{it['title']}  {it['time']}")
         write_snapshot(it["id"], text)
 
         # 邮件不限量：有未提醒的改动就本轮发，不做冷却
@@ -355,7 +359,7 @@ def build_email_html(new_items: list, changes: list) -> str:
         it = ch["item"]
         diff_html = ""
         if ch.get("diff"):
-            rows = []
+            diff_rows = []
             for d in ch["diff"]:
                 if d.startswith("+"):
                     style = "color:#0b7a3b;"
@@ -363,14 +367,14 @@ def build_email_html(new_items: list, changes: list) -> str:
                     style = "color:#999;text-decoration:line-through;"
                 else:
                     style = "color:#888;"
-                rows.append(f'<div style="font-size:12px;line-height:1.7;{style}">'
-                            f'{html.escape(d)}</div>')
+                diff_rows.append(f'<div style="font-size:12px;line-height:1.7;{style}">'
+                                 f'{html.escape(d)}</div>')
             diff_html = (
                 f'<div style="margin-top:10px;padding:10px 12px;background:#fff;'
                 f'border:1px solid #eee;border-radius:6px">'
                 f'<div style="font-size:12px;color:#888;margin-bottom:6px">'
                 f'本次改动（- 为原文，+ 为改后）：</div>'
-                + "".join(rows) + '</div>')
+                + "".join(diff_rows) + '</div>')
         change_rows.append(
             f'<div style="border:1px solid #f0d38a;border-left:4px solid #f59e0b;'
             f'border-radius:8px;padding:12px 16px;margin:10px 0;background:#fffaf0">'
