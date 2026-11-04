@@ -52,7 +52,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add cloud/seen_announcements.json cloud/body_state.json cloud/last_run.txt
+          git add cloud/seen_announcements.json cloud/body_state.json cloud/body_snapshots cloud/last_run.txt
           git diff --cached --quiet || git commit -m "chore: update announcement ledger"
           # 另一轮可能刚推过账本，先同步再推；仍被拒就重试
           for i in 1 2 3; do

@@ -12,6 +12,7 @@
 邮件失败时不会把公告写入账本 → 下一次定时任务自动重试。
 """
 
+import difflib
 import hashlib
 import html
 import json
@@ -33,6 +34,10 @@ BASE_DIR = Path(__file__).resolve().parent
 SEEN_PATH = BASE_DIR / "seen_announcements.json"
 BODY_STATE_PATH = BASE_DIR / "body_state.json"
 HEARTBEAT_PATH = BASE_DIR / "last_run.txt"
+# 上一版正文快照：改动时用来算 diff，提醒里直接显示改了哪几行
+SNAP_DIR = BASE_DIR / "body_snapshots"
+DIFF_MAX_LINES = 24
+DIFF_MAX_CHARS = 120
 
 # ===== 万象棋官网新闻接口（与本地版完全一致）=====
 API_URL = "https://apps.game.qq.com/cmc/cross"
@@ -158,6 +163,42 @@ def body_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def snapshot_path(newsid: str) -> Path:
+    return SNAP_DIR / f"{newsid}.txt"
+
+
+def read_snapshot(newsid: str) -> str:
+    try:
+        return snapshot_path(newsid).read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+
+def write_snapshot(newsid: str, text: str):
+    SNAP_DIR.mkdir(parents=True, exist_ok=True)
+    snapshot_path(newsid).write_text(text, encoding="utf-8")
+
+
+def diff_lines(old: str, new: str) -> list:
+    """行级差异，「- 旧行」/「+ 新行」，用于提醒里直接看出改了哪里。"""
+    if not old:
+        return []
+    out = []
+    for raw in difflib.unified_diff(old.split("\n"), new.split("\n"), lineterm="", n=0):
+        if raw.startswith(("+++", "---", "@@")):
+            continue
+        sign, body = raw[:1], raw[1:].strip()
+        if sign not in "+-" or not body:
+            continue
+        if len(body) > DIFF_MAX_CHARS:
+            body = body[:DIFF_MAX_CHARS] + "…"
+        out.append(f"{sign} {body}")
+        if len(out) >= DIFF_MAX_LINES:
+            out.append(f"…（改动超过 {DIFF_MAX_LINES} 行，仅显示前 {DIFF_MAX_LINES} 行）")
+            break
+    return out
+
+
 def parse_publish_time(value: str):
     try:
         return datetime.strptime((value or "").strip(), "%Y-%m-%d %H:%M:%S").replace(
@@ -212,7 +253,8 @@ def collect_body_changes(announcements: list):
     keep, due = {}, []
     for it in watched:
         try:
-            digest = body_hash(normalize_body(fetch_body(it["id"])))
+            text = normalize_body(fetch_body(it["id"]))
+            digest = body_hash(text)
         except Exception as ex:
             log(f"正文抓取失败 {it['id']}：{ex}（跳过，下次再试）")
             if it["id"] in state:
@@ -223,6 +265,7 @@ def collect_body_changes(announcements: list):
         if not st or not st.get("hash"):
             # 首次见到这篇（新公告首发，或监控刚上线）：静默记基线，不提醒
             keep[it["id"]] = {"title": it["title"], "hash": digest, "notified": digest, "count": 0}
+            write_snapshot(it["id"], text)
             continue
 
         st["title"] = it["title"]
@@ -230,12 +273,20 @@ def collect_body_changes(announcements: list):
         if st["hash"] != digest:
             st["count"] = int(st.get("count") or 0) + 1
             st["hash"] = digest
+            lines = diff_lines(read_snapshot(it["id"]), text)
+            if lines:
+                # 冷却内的多次改动按顺序累加，提醒后清空
+                st["diff"] = ((st.get("diff") or []) + lines)[-DIFF_MAX_LINES:]
+            elif st.get("diff") is None:
+                st["diff"] = ["（没有上一版快照，无法显示本次差异；从下一次改动起可以对比）"]
             log(f"✎ 正文有改动（第{st['count']}次）：{it['title']}  {it['time']}")
+        write_snapshot(it["id"], text)
 
         # 邮件不限量：有未提醒的改动就本轮发，不做冷却
         if st["hash"] != st.get("notified"):
-            due.append({"item": it, "count": int(st["count"])})
+            due.append({"item": it, "count": int(st["count"]), "diff": st.get("diff") or []})
             st["notified"] = st["hash"]
+            st.pop("diff", None)
         keep[it["id"]] = st
 
     return due, keep
@@ -302,6 +353,24 @@ def build_email_html(new_items: list, changes: list) -> str:
     change_rows = []
     for ch in changes:
         it = ch["item"]
+        diff_html = ""
+        if ch.get("diff"):
+            rows = []
+            for d in ch["diff"]:
+                if d.startswith("+"):
+                    style = "color:#0b7a3b;"
+                elif d.startswith("-"):
+                    style = "color:#999;text-decoration:line-through;"
+                else:
+                    style = "color:#888;"
+                rows.append(f'<div style="font-size:12px;line-height:1.7;{style}">'
+                            f'{html.escape(d)}</div>')
+            diff_html = (
+                f'<div style="margin-top:10px;padding:10px 12px;background:#fff;'
+                f'border:1px solid #eee;border-radius:6px">'
+                f'<div style="font-size:12px;color:#888;margin-bottom:6px">'
+                f'本次改动（- 为原文，+ 为改后）：</div>'
+                + "".join(rows) + '</div>')
         change_rows.append(
             f'<div style="border:1px solid #f0d38a;border-left:4px solid #f59e0b;'
             f'border-radius:8px;padding:12px 16px;margin:10px 0;background:#fffaf0">'
@@ -310,6 +379,7 @@ def build_email_html(new_items: list, changes: list) -> str:
             f'【公告有改动·第{ch["count"]}次】{it["title"]}</a>'
             f'<div style="color:#999;font-size:12px;margin-top:4px">'
             f'公告 · 发布时间：{it["time"]}</div>'
+            f'{diff_html}'
             f'<div style="margin-top:8px">'
             f'<a href="{it["draw"]}" style="display:inline-block;padding:6px 14px;'
             f'background:#f59e0b;color:#fff;border-radius:6px;font-size:13px;'
