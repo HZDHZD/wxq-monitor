@@ -245,7 +245,7 @@ function compressPair(b, a) {
   if (!la) {
     const dm = lb.match(/^[，,。；;、：:\s]+/);
     const dsep = dm ? dm[0] : '';
-    return pre + dsep + DEL_OPEN + lb.slice(dsep.length) + DEL_CLOSE + '（删除）';
+    return pre + dsep + DEL_OPEN + lb.slice(dsep.length) + '（删除）' + DEL_CLOSE;
   }
   /* 已把上一并列项复制到右支，不再剥公共后缀，否则会剥成「吸血 → 生命恢复和护盾效果」 */
   if (conjDup) return pre + lb + ' → ' + ordPrefix + la;
@@ -430,6 +430,30 @@ function compressPair(b, a) {
   /* 右支省略了主语、只把共有的中心词抄了一遍：合并成「…60% → 75%」 */
   const omit = compressOmitted(lb, la);
   if (omit) return pre + omit;
+  /* 调整后开头与调整前结尾重合、调整前前面还多出一整段：多出来的那段是整段删除，
+     画成灰色删除线（贷款协议「能量下限为-20且不受到惩罚」→「不受到惩罚，…」）。
+     要求多出来的部分至少 3 个字、不落在标点或数字中间，避免把「不」这种单字
+     或半个数值划成删除线（机关秘术「不可叠穿 → 可叠穿」仍按箭头写） */
+  {
+    const max = Math.min(lb.length - 2, la.length - 2);
+    for (let k = max; k >= 2; k--) {
+      const seg = lb.slice(lb.length - k);
+      if (!la.startsWith(seg)) continue;
+      const cut = lb.slice(0, lb.length - k);
+      if (cut.length < 3 || /[，,。；;、：:]$/.test(cut)) continue;
+      if (/[0-9.%％]$/.test(cut) && /^[0-9.%％]/.test(seg)) continue;
+      const body = pre + DEL_OPEN + cut + '（删除）' + DEL_CLOSE + seg;
+      /* 调整后比共有部分多出来的尾巴是新加的内容，标新增（贷款协议
+         「…不受到惩罚，回合结束时每有1名其他玩家能量为负…」） */
+      const rest = la.slice(seg.length);
+      const extra = rest.replace(/^[。；，、：:\s]+/, '').replace(/[。；\s]+$/, '');
+      if (!extra) return body + rest;
+      if (isOwnRule(extra) || /[。；]/.test(extra)) {
+        return body + '。【新增】' + extra + '（新增）【/新增】。';
+      }
+      return body + '，【新增】' + extra + '（新增）【/新增】' + (/[。！？]$/.test(rest) ? '。' : '');
+    }
+  }
   return pre + lb + ' → ' + ordPrefix + rightPre + la;
 }
 

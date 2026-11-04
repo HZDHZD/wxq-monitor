@@ -218,6 +218,185 @@ function toggleValMarks(raw, ss, se) {
   return { text: out, start: at[ps], end: at[pe] };
 }
 
+/* 人工标删：把输入框里选中的一段文字包成【删】…【/删】（出图端画灰字 + 删除线）。
+   选中的文字整段已经在【删】里，再点一次就取消；只选中一部分时把两段并成一段。
+   和标金一样，只重写【删】，【新增】/【改】留在原来的纯文本位置上 */
+function toggleDelMarks(raw, ss, se) {
+  const s = String(raw == null ? '' : raw);
+  const S = Math.max(0, Math.min(ss, se)), E = Math.max(ss, se);
+  const plain = [], keep = [], toPlain = [];
+  const TOK = [MARK_OPEN, MARK_CLOSE, DEL_OPEN, DEL_CLOSE, VAL_OPEN, VAL_CLOSE];
+  let pi = 0, i = 0;
+  while (i < s.length) {
+    const tok = TOK.find(t => s.startsWith(t, i));
+    if (tok) {
+      /* 标记字符本身也显示在输入框里，选择边界可能落在标记中间：贴到标记起点 */
+      for (let k = 0; k < tok.length; k++) toPlain[i + k] = pi;
+      if (tok !== DEL_OPEN && tok !== DEL_CLOSE) keep.push({ pos: pi, text: tok });
+      i += tok.length;
+      continue;
+    }
+    toPlain[i] = pi;
+    plain.push(s[i]);
+    pi++; i++;
+  }
+  toPlain[s.length] = pi;
+  const ps = toPlain[S] == null ? pi : toPlain[S];
+  const pe = toPlain[E] == null ? pi : toPlain[E];
+  if (pe <= ps) return { text: s, start: S, end: E };
+
+  const dels = parseMarks(s).dels.slice();
+  /* 「（删除）」跟着删除线一起管理：它属于删除标记的一部分（灰色 + 删除线）。
+     重建前先把区间里/区间后紧挨着的「（删除）」字样抹掉，最后由关门标记统一补回，
+     这样取消删除时不会留下一个孤零零的「（删除）」 */
+  const LBL = '（删除）';
+  const plainStr = plain.join('');
+  /* 「（删除）」是删除标记自带的注记，反复标删/取消时可能连写多个。
+     这里把区间内部、以及区间后面紧跟的注记全部当成标记的一部分抹掉，
+     最后由关门标记统一补一个，避免越点越多 */
+  const blankLabels = (a, b) => {
+    for (let q = a; q < b; q++) {
+      if (plainStr.slice(q, q + LBL.length) === LBL) {
+        for (let k = q; k < q + LBL.length; k++) plain[k] = '';
+      }
+    }
+    let y = b;
+    while (plainStr.slice(y, y + LBL.length) === LBL) {
+      for (let k = y; k < y + LBL.length; k++) plain[k] = '';
+      y += LBL.length;
+    }
+  };
+  dels.forEach(([a, b]) => blankLabels(a, b));
+  /* 取消判定：只要选中范围基本落在已有的【删】区间里（多带一两个字符、
+     或把【/删】标记一起圈进来都算），就直接撤销这一整段 */
+  const ov = dels.filter(([a, b]) => Math.min(pe, b) > Math.max(ps, a));
+  const covered = ov.reduce((n, [a, b]) => n + Math.min(pe, b) - Math.max(ps, a), 0);
+  let ranges;
+  if (ov.length && covered >= (pe - ps) * 0.8) {
+    ranges = dels.filter(r => !ov.includes(r));
+  } else {
+    ranges = dels.concat([[ps, pe]])
+      .sort((x, y) => x[0] - y[0])
+      .reduce((out, r) => {
+        const last = out[out.length - 1];
+        if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]);
+        else out.push([r[0], r[1]]);
+        return out;
+      }, []);
+  }
+  /* 新划的区间里如果也带着「（删除）」，一并抹掉；抹完没有正文的区间直接丢掉 */
+  ranges.forEach(([a, b]) => blankLabels(a, b));
+  ranges = ranges.filter(([a, b]) => plain.slice(a, b).join('') !== '');
+
+  const byPos = new Map();
+  keep.forEach(m => {
+    if (!byPos.has(m.pos)) byPos.set(m.pos, []);
+    byPos.get(m.pos).push(m.text);
+  });
+  const opens = new Map(), closes = new Map();
+  ranges.forEach(([a, b]) => {
+    opens.set(a, (opens.get(a) || 0) + 1);
+    closes.set(b, (closes.get(b) || 0) + 1);
+  });
+  let out = '';
+  const at = [], beforeClose = [];
+  for (let p = 0; p <= plain.length; p++) {
+    /* 选区末端贴在关门标记之前：否则下一次点按钮会把【/删】一起圈进去 */
+    beforeClose[p] = out.length;
+    for (let k = 0; k < (closes.get(p) || 0); k++) out += LBL + DEL_CLOSE;
+    const ms = byPos.get(p);
+    if (ms) out += ms.join('');
+    for (let k = 0; k < (opens.get(p) || 0); k++) out += DEL_OPEN;
+    at[p] = out.length;
+    if (p < plain.length) out += plain[p];
+  }
+  return { text: out, start: at[ps], end: beforeClose[pe] };
+}
+
+/* 人工标新增：把输入框里选中的一段文字包成【新增】…（新增）【/新增】。
+   选中的文字整段已经在【新增】里，再点一次就取消；只选中一部分时把两段并成一段。
+   和标金/标删一样，只重写【新增】，【删】/【改】留在原来的纯文本位置上 */
+function toggleNewMarks(raw, ss, se) {
+  const s = String(raw == null ? '' : raw);
+  const S = Math.max(0, Math.min(ss, se)), E = Math.max(ss, se);
+  const plain = [], keep = [], toPlain = [];
+  const TOK = [MARK_OPEN, MARK_CLOSE, DEL_OPEN, DEL_CLOSE, VAL_OPEN, VAL_CLOSE];
+  let pi = 0, i = 0;
+  while (i < s.length) {
+    const tok = TOK.find(t => s.startsWith(t, i));
+    if (tok) {
+      for (let k = 0; k < tok.length; k++) toPlain[i + k] = pi;
+      if (tok !== MARK_OPEN && tok !== MARK_CLOSE) keep.push({ pos: pi, text: tok });
+      i += tok.length;
+      continue;
+    }
+    toPlain[i] = pi;
+    plain.push(s[i]);
+    pi++; i++;
+  }
+  toPlain[s.length] = pi;
+  const ps = toPlain[S] == null ? pi : toPlain[S];
+  const pe = toPlain[E] == null ? pi : toPlain[E];
+  if (pe <= ps) return { text: s, start: S, end: E };
+
+  const spans = parseMarks(s).spans.slice();
+  const LBL = '（新增）';
+  const plainStr = plain.join('');
+  const blankLabels = (a, b) => {
+    for (let q = a; q < b; q++) {
+      if (plainStr.slice(q, q + LBL.length) === LBL) {
+        for (let k = q; k < q + LBL.length; k++) plain[k] = '';
+      }
+    }
+    let y = b;
+    while (plainStr.slice(y, y + LBL.length) === LBL) {
+      for (let k = y; k < y + LBL.length; k++) plain[k] = '';
+      y += LBL.length;
+    }
+  };
+  spans.forEach(([a, b]) => blankLabels(a, b));
+  const ov = spans.filter(([a, b]) => Math.min(pe, b) > Math.max(ps, a));
+  const covered = ov.reduce((n, [a, b]) => n + Math.min(pe, b) - Math.max(ps, a), 0);
+  let ranges;
+  if (ov.length && covered >= (pe - ps) * 0.8) {
+    ranges = spans.filter(r => !ov.includes(r));
+  } else {
+    ranges = spans.concat([[ps, pe]])
+      .sort((x, y) => x[0] - y[0])
+      .reduce((out, r) => {
+        const last = out[out.length - 1];
+        if (last && r[0] <= last[1]) last[1] = Math.max(last[1], r[1]);
+        else out.push([r[0], r[1]]);
+        return out;
+      }, []);
+  }
+  ranges.forEach(([a, b]) => blankLabels(a, b));
+  ranges = ranges.filter(([a, b]) => plain.slice(a, b).join('') !== '');
+
+  const byPos = new Map();
+  keep.forEach(m => {
+    if (!byPos.has(m.pos)) byPos.set(m.pos, []);
+    byPos.get(m.pos).push(m.text);
+  });
+  const opens = new Map(), closes = new Map();
+  ranges.forEach(([a, b]) => {
+    opens.set(a, (opens.get(a) || 0) + 1);
+    closes.set(b, (closes.get(b) || 0) + 1);
+  });
+  let out = '';
+  const at = [], beforeClose = [];
+  for (let p = 0; p <= plain.length; p++) {
+    beforeClose[p] = out.length;
+    for (let k = 0; k < (closes.get(p) || 0); k++) out += LBL + MARK_CLOSE;
+    const ms = byPos.get(p);
+    if (ms) out += ms.join('');
+    for (let k = 0; k < (opens.get(p) || 0); k++) out += MARK_OPEN;
+    at[p] = out.length;
+    if (p < plain.length) out += plain[p];
+  }
+  return { text: out, start: at[ps], end: beforeClose[pe] };
+}
+
 /* 与 wrapText 相同的预处理：数字和量词之间不留空格、剥离新增标记 */
 function descPrepared(text) {
   return parseMarks(String(text == null ? '' : text)
@@ -297,6 +476,12 @@ function drawDescLines(ctx, lines, text, x, y, lh, base, hi, val, valBg, del) {
   const dels = pr.dels;
   const cVal = val || hi;
   const cDel = del || '#9a9a9a';
+  /* 「（删除）」这个注记只变灰、不划删除线（划掉会看成「不是删除」） */
+  const lbls = [];
+  dels.forEach(([a, b]) => {
+    if (src.slice(b - 4, b) === '（删除）') lbls.push([b - 4, b]);
+    else if (src.slice(b, b + 4) === '（删除）') lbls.push([b, b + 4]);
+  });
   const rgs = lineRanges(src, lines);
   const fsz = /(\d+(?:\.\d+)?)px/.exec(ctx.font);
   const fs = fsz ? parseFloat(fsz[1]) : Math.round(lh * 0.65);
@@ -308,7 +493,7 @@ function drawDescLines(ctx, lines, text, x, y, lh, base, hi, val, valBg, del) {
         ctx.fillStyle = base;
         ctx.fillText(l, x, y);
       } else {
-        /* 先按「颜色 + 是否数值 + 是否删除」切段 */
+        /* 先按「颜色 + 是否数值 + 是否划删除线」切段 */
         const runs = [];
         let run = '', cur = null, curVal = false, curDel = false;
         for (let k = 0; k < l.length; k++) {
@@ -317,12 +502,14 @@ function drawDescLines(ctx, lines, text, x, y, lh, base, hi, val, valBg, del) {
           const isVal = vals.some(v => gi >= v[0] && gi < v[1]);
           if (isVal) col = cVal;
           const isDel = dels.some(d => gi >= d[0] && gi < d[1]);
-          if (isDel) col = cDel;
-          if (cur === null) { cur = col; curVal = isVal; curDel = isDel; run = l[k]; }
-          else if (col === cur && isVal === curVal && isDel === curDel) run += l[k];
+          const isLbl = lbls.some(d => gi >= d[0] && gi < d[1]);
+          if (isDel || isLbl) col = cDel;
+          const strike = isDel && !isLbl;
+          if (cur === null) { cur = col; curVal = isVal; curDel = strike; run = l[k]; }
+          else if (col === cur && isVal === curVal && strike === curDel) run += l[k];
           else {
             runs.push({ t: run, c: cur, v: curVal, d: curDel });
-            cur = col; curVal = isVal; curDel = isDel; run = l[k];
+            cur = col; curVal = isVal; curDel = strike; run = l[k];
           }
         }
         if (run) runs.push({ t: run, c: cur, v: curVal, d: curDel });

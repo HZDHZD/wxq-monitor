@@ -285,6 +285,67 @@ if (elBtnGold) {
   });
 }
 
+/* ---------- 人工标删：和标金同一套操作，只是包成【删】…【/删】 ----------
+   出图端画灰色 + 删除线；选中已标删的整段再点一次即取消。
+   表格说明、标题同样不参与（标题绘制时会剥掉标记） */
+let markTipTimerDel = 0;
+function markTipDel(msg) {
+  const btn = document.getElementById('btnDel');
+  if (!btn) return;
+  if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+  clearTimeout(markTipTimerDel);
+  btn.textContent = msg;
+  markTipTimerDel = setTimeout(() => { btn.textContent = btn.dataset.label; }, 1400);
+}
+const elBtnDel = document.getElementById('btnDel');
+if (elBtnDel) {
+  /* 按下时不让输入框失焦，选区和焦点都保住 */
+  elBtnDel.addEventListener('mousedown', e => e.preventDefault());
+  elBtnDel.addEventListener('click', () => {
+    const act = document.activeElement;
+    const t = (act && act.matches && act.matches('textarea.id, textarea.kd'))
+      ? act : markTarget;
+    if (!t || !t.isConnected) { markTipDel('先选中文字'); return; }
+    const ss = t.selectionStart, se = t.selectionEnd;
+    if (se <= ss) { markTipDel('先选中文字'); return; }
+    const r = toggleDelMarks(t.value, ss, se);
+    if (r.text === t.value) return;
+    t.value = r.text;
+    t.dispatchEvent(new Event('input', { bubbles: true }));
+    t.focus();
+    t.setSelectionRange(r.start, r.end);
+  });
+}
+
+/* ---------- 人工标新增：包成【新增】…（新增）【/新增】，再点一次取消 ---------- */
+let markTipTimerNew = 0;
+function markTipNew(msg) {
+  const btn = document.getElementById('btnNew');
+  if (!btn) return;
+  if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+  clearTimeout(markTipTimerNew);
+  btn.textContent = msg;
+  markTipTimerNew = setTimeout(() => { btn.textContent = btn.dataset.label; }, 1400);
+}
+const elBtnNew = document.getElementById('btnNew');
+if (elBtnNew) {
+  elBtnNew.addEventListener('mousedown', e => e.preventDefault());
+  elBtnNew.addEventListener('click', () => {
+    const act = document.activeElement;
+    const t = (act && act.matches && act.matches('textarea.id, textarea.kd'))
+      ? act : markTarget;
+    if (!t || !t.isConnected) { markTipNew('先选中文字'); return; }
+    const ss = t.selectionStart, se = t.selectionEnd;
+    if (se <= ss) { markTipNew('先选中文字'); return; }
+    const r = toggleNewMarks(t.value, ss, se);
+    if (r.text === t.value) return;
+    t.value = r.text;
+    t.dispatchEvent(new Event('input', { bubbles: true }));
+    t.focus();
+    t.setSelectionRange(r.start, r.end);
+  });
+}
+
 /* 按钮：增删 */
 elSections.addEventListener('click', e => {
   const btn = e.target.closest('[data-act]'); if (!btn) return;
