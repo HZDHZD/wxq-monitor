@@ -13,6 +13,16 @@ function compressPair(b, a) {
   b = b.trim(); a = a.trim();
   if (!b || !a || b === a) return b || a;
   a = stripLeadConj(b, a);
+  /* 整句大改写必须先判：命中后整段交给 renderBigRewrite，不能再按句递归。
+     按句递归会把长句拆成多个短句，短句不满足 bigRewrite 的条件，又会退回
+     老压缩，公共字被卷进箭头（能量条里的「回合」） */
+  /* 两版几乎不共用文字、整段重写的（班叔/弹簧这种）：走方案 D——内容一字不动，
+     旧版、新版各成一段，中间用「↓ 调整后 ↓」分隔，比超长箭头直观。
+     包 BIG 区间让标金跳过（内容原样，不逐个标金） */
+  if (dRewrite(b, a)) return BIG_OPEN + dLayout(b, a) + BIG_CLOSE;
+  /* 包 BIG 区间让标金跳过整段，但区间内的【改】由 renderBigRewrite 自己标，
+     标金时必须保留（箭头两侧的数字要标金） */
+  if (bigRewrite(b, a)) return BIG_OPEN + renderBigRewrite(b, a) + BIG_CLOSE;
   /* 两侧能切成同样多的句子（≥2 句）时按句对齐、逐句压缩：
      整段压成一个长箭头时，左侧整段保留、右侧整段重写，
      第一句里新增的触发时机就会藏进右侧文字里读不出来
@@ -47,11 +57,6 @@ function compressPair(b, a) {
         : head + '（' + tailM[2] + '）';
     }
   }
-  /* 两版把分句内容调换了位置（「获得1张同名牌；胜利再得2张」→「获得1张英雄牌；
-     胜利再得1张同名牌」）：开头结尾都对不上、中间一大段又要整段重写，硬压只会把
-     箭头插进两条结构不同的句子中间。这种直接整句对整句，不共享任何片段 */
-  const big = bigRewrite(b, a);
-  if (big) return big;
   /* 两侧按逗号切成同样多的小句（≥2）时逐小句对齐压缩：
      一句话里并列两件事、中间那段又是两版共有的（机关秘术「机关匣不可叠穿，
      故障机器人基础双抗10 → 可叠穿，…20」），整句箭头会把公共中段一起吞掉。
@@ -276,7 +281,8 @@ function compressPair(b, a) {
     const rRes = la.slice(0, la.length - sb);
     if (sb > 0 && sb < lb.length && /[；;]/.test(rRes) &&
         !hasPred(lRes) && /(?:时|后|前)$/.test(lRes) && lRes.length >= 3) {
-      /* 整句两端全写＝整句大改写，按 bigRewrite 的口径不标金 */
+      /* 整句两端全写＝整句大改写：和 bigRewrite 一样整段包起来，
+         标金时按整段比较，数值没变就不会标 */
       return BIG_OPEN + b.replace(/[。；]\s*$/, '') + ' → ' + a + BIG_CLOSE;
     }
   }
@@ -491,10 +497,14 @@ function composeDesc(prefixLines, before, after, opts) {
   const lineMode = !!(opts && opts.sentenceLines) &&
     before.length > 1 && before.length === after.length;
   let body;
-  if (lineMode) body = before
+  /* 整条都是整段重写的（班叔/弹簧这种）：走方案 D，不再按小句拆成多个箭头 */
+  const dBody = dRewrite(before.join('；'), after.join('；'))
+    ? dLayout(before.join('\n'), after.join('\n')) : '';
+  if (dBody) body = dBody;
+  else if (lineMode) body = before
     .map((b, i) => composeDesc([], [b], [after[i]]))
     .filter(Boolean).join('\n');
-  const pairs = lineMode ? null : pairSides(before, after);
+  const pairs = (dBody || lineMode) ? null : pairSides(before, after);
   if (pairs) {
     /* 触发条件常被逗号切成半句（「战斗开始时」「每有7级」），先和紧跟的效果合回一句：
        否则条件被保留、效果被当成未变项删掉，会剩下一句没头没尾的话 */
@@ -612,7 +622,7 @@ function composeDesc(prefixLines, before, after, opts) {
       else sep = prev.sep || '；';
       return sep + r.txt;
     }).join('');
-  } else if (!lineMode) {
+  } else if (!lineMode && !dBody) {
     /* 句数对不齐时不再整段硬拼，先压掉公共前后缀，至少去掉重复内容 */
     body = compressPair(before.join('；'), after.join('；'));
   }
@@ -630,7 +640,8 @@ function composeDesc(prefixLines, before, after, opts) {
   /* 正文末尾的冒号/分号是悬空的（「…如下：」后面没有内容），去掉再补句号 */
   body = body.replace(/[：:；;]\s*$/, '');
   if (!body) return pfx ? pfx.replace(/[：:]\s*$/, '') + '。' : '';
-  const end = /[。！？]$/.test(body) ? '' : '。';
+  /* 大改写/方案 D 的输出末尾是 BIG_CLOSE（不可见），不能把它当成「没有句号」再补一个 */
+  const end = /[。！？][\uE003]*$/.test(body) ? '' : '。';
   if (!pfx) return body + end;
   /* 前缀已经概括了正文第一条新增（多彩古币「增加保底获得1张古币的设定。」
     与新增句「获得1张古币」）：同一件事不说两遍，把（新增）标到概括句上，
@@ -731,6 +742,23 @@ function inlineDiff(bb, aa) {
   });
   if (ch) blocks.push(ch);
   if (eq) blocks.push({ eq });
+  /* 数值符号被当成公共字符（「最终伤害-」+「50%」/「20%」）：符号只留在左边，
+     箭头右侧会变成正数。把符号并回两侧变化段 → 「最终伤害[-50% → -20%]」 */
+  for (let k = 1; k < blocks.length; k++) {
+    const b1 = blocks[k], p = blocks[k - 1];
+    if (b1.del === undefined || p.eq === undefined || !b1.del || !b1.ins) continue;
+    if (b1.del === b1.ins) continue;
+    const sym = p.eq.slice(-1);
+    if (!/[-+－＋×*/／%％]/.test(sym)) continue;
+    /* 「100+150% → 100+200%」里的「+」是连接两个数值的加号，属于整个表达式，
+       挪走会让右侧丢了「100」；只有符号前面不是数字/百分号时（「伤害-」「攻击力×」）
+       才把符号当作数值正负号处理 */
+    if (/[0-9%％.．]$/.test(p.eq.slice(0, -1))) continue;
+    if (!/^[0-9]/.test(b1.del) || !/^[0-9]/.test(b1.ins)) continue;
+    p.eq = p.eq.slice(0, -1);
+    b1.del = sym + b1.del;
+    b1.ins = sym + b1.ins;
+  }
   /* LCS 有时把变化点切在词中间（四人同行「卡牌5选1 → 3-5阶英雄牌5选1」会切成
      「卡 → 3-5阶英雄」+「牌5选1…」）：变化段一侧只剩一个汉字、另一侧是整词，
      且后面紧跟着同一个汉字时，把这个汉字并进箭头两侧，读成「卡牌 → 3-5阶英雄牌」 */
@@ -882,13 +910,16 @@ function arrowVerbatim(prefixLines, before, after) {
        就地改不动（整段插入、调序）时交给压缩算法按句对齐，
        再不行才退回两端全写。
        就地改写的行用不可见字符包起来，标【改】时按「箭头旁就是新值」处理 */
-    const inl = (inlineMode && bb !== aa) ? inlineDiff(bb, aa) : '';
+    /* 整句大改写不走 inlineDiff：字符级就地改写会从半个数字/半个词处切开
+       （武则天会变成「每隔0.[75秒… → 4秒…]」），必须交给 compressPair 新渲染 */
+    const inl = (inlineMode && bb !== aa && !bigRewrite(bb, aa)) ? inlineDiff(bb, aa) : '';
     let body;
     if (bb === aa) body = bb;
     else if (inl) body = '\uE000' + inl + '\uE001';
     /* 压缩算法不一定带箭头：整段追加时它写成「原句。【新增】追加句（新增）【/新增】」 */
     else body = inlineMode ? compressPair(bb, aa) : bb + ' → ' + aa;
-    return tag + body + (/[。！？]$/.test(body.replace(/[\uE000\uE001]/g, '')) ? '' : '。');
+    /* 尾部可能是 BIG_CLOSE（不可见），不能只看它前面有没有句号就再补一个 */
+    return tag + body + (/[。！？]$/.test(body.replace(/[\uE000\uE001]/g, '').replace(/[\uE003]+$/, '')) ? '' : '。');
   };
   let main = '';
   if (bs.length && as.length && bs.length === as.length) {
@@ -943,5 +974,353 @@ function wrapNewBody(s) {
   const m = /([。！？])$/.exec(s);
   const core = m ? s.slice(0, -1) : s;
   return '【新增】' + core + '（新增）【/新增】' + (m ? m[1] : '');
+}
+
+/* ====================  整句大改写（bigRewrite）展示  ==================== */
+/* bigRewrite 命中的两版已经没有可共用的句子骨架，但也不该「整段删 + 整段增」。
+   这里按三层处理：
+   1. 句子对齐：整句删/增仍用【删】/【新增】；
+   2. 一对一的句子先试着就地标箭头（数值、短词、短替换）；
+   3. 就地标不动时，公共开头/结尾各只写一遍，中间整块用 [旧 → 新]，
+      绝不把公共内容写两遍。公共头尾都不足 4 个有效字时才整句箭头。
+   短句未命中 bigRewrite，不走这里，仍用原来的压缩逻辑 */
+const BW_NUM_SRC = '[+\\-−]?[0-9]+(?:\\.[0-9]+)?[%％]?(?:\\+[0-9]+(?:\\.[0-9]+)?[%％]?)*';
+const BW_TOKEN_RE = new RegExp('第?' + BW_NUM_SRC + '|[A-Za-z]+|[\\s\\S]', 'g');
+const BW_NUM_RE = new RegExp('^' + BW_NUM_SRC + '$');
+const BW_PARALLEL_ADD_RE = /^(，|,)?(并|且|同时|另外|此外|还|也)/;
+
+function bwTokens(s) { return s.match(BW_TOKEN_RE) || []; }
+function bwIsNum(s) { return BW_NUM_RE.test(s); }
+
+function bwLcsLen(x, y) {
+  const m = x.length, n = y.length;
+  let prev = new Array(n + 1).fill(0), cur = new Array(n + 1).fill(0);
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) cur[j] = x[i - 1] === y[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
+    const t = prev; prev = cur; cur = t; cur.fill(0);
+  }
+  return prev[n];
+}
+function bwSim(x, y) {
+  return (!x.length || !y.length) ? 0 : (2 * bwLcsLen(x, y)) / (x.length + y.length);
+}
+
+function bwOps(b, a) {
+  const B = bwTokens(b), A = bwTokens(a);
+  const m = B.length, n = A.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) {
+    dp[i][j] = B[i] === A[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  }
+  const ops = []; let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (B[i] === A[j]) { ops.push(['same', B[i]]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push(['del', B[i]]); i++; }
+    else { ops.push(['add', A[j]]); j++; }
+  }
+  while (i < m) ops.push(['del', B[i++]]);
+  while (j < n) ops.push(['add', A[j++]]);
+  return ops;
+}
+
+function bwRuns(ops) {
+  const out = [];
+  for (const [k, t] of ops) {
+    const last = out[out.length - 1];
+    if (last && last.k === k) last.t += t;
+    else out.push({ k, t });
+  }
+  return out;
+}
+
+function bwClusters(rs) {
+  const res = [];
+  for (let i = 0; i < rs.length;) {
+    if (rs[i].k === 'same') { res.push({ type: 'same', t: rs[i].t }); i++; continue; }
+    let oldT = '', newT = '', j = i;
+    while (j < rs.length) {
+      if (rs[j].k === 'del') { oldT += rs[j].t; j++; }
+      else if (rs[j].k === 'add') { newT += rs[j].t; j++; }
+      else {
+        const bridge = rs[j].t.length <= 2 && j + 1 < rs.length && rs[j + 1].k !== 'same';
+        if (bridge) { oldT += rs[j].t; newT += rs[j].t; j++; } else break;
+      }
+    }
+    res.push({ type: oldT && newT ? 'rep' : oldT ? 'del' : 'add', oldT, newT });
+    i = j;
+  }
+  return res;
+}
+
+/* 夹在变化块之间的 1-2 字公共字（「回合」「，」）并入同一个变化块，
+   避免「A【删】本【/删】【新增】下【/新增】B」这种被公共字劈开的碎片 */
+function bwMergeBridges(rs) {
+  const out = [];
+  let i = 0;
+  while (i < rs.length) {
+    const c = rs[i];
+    if (c.type === 'same') { out.push(c); i++; continue; }
+    let oldT = c.oldT, newT = c.newT, j = i + 1;
+    while (j < rs.length) {
+      const nx = rs[j];
+      if (nx.type === 'same' && nx.t.length <= 2 && j + 1 < rs.length && rs[j + 1].type !== 'same') {
+        oldT += nx.t; newT += nx.t;
+        const nn = rs[j + 1];
+        oldT += nn.oldT; newT += nn.newT;
+        j += 2; continue;
+      }
+      if (nx.type !== 'same') { oldT += nx.oldT; newT += nx.newT; j++; continue; }
+      break;
+    }
+    out.push({ type: oldT && newT ? 'rep' : oldT ? 'del' : 'add', oldT, newT });
+    i = j;
+  }
+  return out;
+}
+
+/* 箭头两侧只给真正变了的数字标金；两侧数字个数对不上时不做猜测 */
+function bwMarkNums(L, R) {
+  const ln = L.match(/[0-9]+(?:\.[0-9]+)?[%％]?/g) || [];
+  const rn = R.match(/[0-9]+(?:\.[0-9]+)?[%％]?/g) || [];
+  if (!ln.length && !rn.length) return [L, R];
+  const wrap = (s, arr, other) => {
+    let out = '', last = 0, idx = 0; const re = /[0-9]+(?:\.[0-9]+)?[%％]?/g; let m;
+    while ((m = re.exec(s))) {
+      out += s.slice(last, m.index);
+      const same = arr.length === other.length && other[idx] === m[0];
+      out += same ? m[0] : '【改】' + m[0] + '【/改】';
+      last = re.lastIndex; idx++;
+    }
+    return out + s.slice(last);
+  };
+  return [wrap(L, ln, rn), wrap(R, rn, ln)];
+}
+
+/* 方案 D：内容不动，只调排版。两版几乎不共用文字、整段重写的条目，
+   旧版、新版各成一段，中间用「↓ 调整后 ↓」分隔（比超长箭头直观） */
+function dRewrite(b, a) {
+  /* 0.69 是实测分界：弹簧/香香 0.48–0.53、乔汐（27 号 0.63 / 29 号 0.69）
+     都属改动分散在开头/中段/尾巴的整段重写；厉兵秣马（只换几张牌、几个回合）
+     0.82，武则天女帝权威 0.96，不能放进来 */
+  /* 能逐小句对齐的不算重写：贷款协议那种「回合开始 → 结束」「本 → 下」
+     每对小句都有公共词，精细箭头比整段两段式更好读，相似度虽在 0.69 以内
+     仍保持原样 */
+  const bcs = splitClausesSep(String(b).replace(/；/g, '，')).map(c => c.t);
+  const acs = splitClausesSep(String(a).replace(/；/g, '，')).map(c => c.t);
+  /* 对齐的小句还要两边内容相近（相似度 ≥0.75）才算「同一句在改」；
+     弹簧那种开头都一样、后半整段换掉的，命中数虚高，仍是重写 */
+  let ci = 0, hit = 0;
+  for (const x of bcs) {
+    for (let j = ci; j < acs.length; j++) {
+      if (acs[j] === x || sharedEdge(x, acs[j]) >= 2) {
+        if (bwSim(x, acs[j]) >= 0.75) hit++;
+        ci = j + 1;
+        break;
+      }
+    }
+  }
+  /* 大部分小句都是局部小改（贷款协议 4/4）就不是重写，保留精细箭头 */
+  const alignable = bcs.length >= 2 && hit / bcs.length >= 0.75;
+  return !!bigRewrite(b, a) && !alignable && bwSim(b, a) < 0.69 &&
+    Math.max(bwEffLen(b), bwEffLen(a)) >= 15;
+}
+function dLayout(b, a) {
+  const para = s => {
+    const t = String(s).trim().replace(/[。！？]$/, '');
+    return t ? t + '。' : '';
+  };
+  return para(b) + '\n【改】↓ 调整后 ↓【/改】\n' + para(a);
+}
+
+/* 长替换先找一段公共子串：公共部分只写一次，前段/后段各自箭头 */
+function bwCommonSub(x, y) {
+  const m = x.length, n = y.length;
+  let best = { len: 0, i: 0, j: 0 };
+  let prev = new Array(n + 1).fill(0);
+  for (let i = 1; i <= m; i++) {
+    const cur = new Array(n + 1).fill(0);
+    for (let j = 1; j <= n; j++) {
+      if (x[i - 1] === y[j - 1]) {
+        cur[j] = prev[j - 1] + 1;
+        if (cur[j] > best.len) best = { len: cur[j], i: i - cur[j], j: j - cur[j] };
+      }
+    }
+    prev = cur;
+  }
+  return best;
+}
+
+function bwSeg(x, y) {
+  if (x && y) return '[' + x + ' → ' + y + ']';
+  if (x) return '【删】' + x + '（删除）【/删】';
+  if (y) return '【新增】' + y + '（新增）【/新增】';
+  return '';
+}
+
+function bwRenderBlock(oldT, newT) {
+  const total = oldT.length + newT.length;
+  const sim = bwSim(oldT, newT);
+  /* 新内容以「并/且/同时/另外」开头，说明是并列追加，不是替换：
+     用箭头会被读成「旧机制被换成了新内容」，语义不对 */
+  if (BW_PARALLEL_ADD_RE.test(newT)) {
+    return '【删】' + oldT + '（删除）【/删】【新增】' + newT + '（新增）【/新增】';
+  }
+  if ((bwIsNum(oldT) && bwIsNum(newT)) || total <= 12 || (sim >= 0.30 && total <= 30)) {
+    const [l, r] = bwMarkNums(oldT, newT);
+    return '[' + l + ' → ' + r + ']';
+  }
+  const c = bwCommonSub(oldT, newT);
+  /* 公共子串的边界落在数值符号上时（「…最终伤害-」+「50%」/「20%」），
+     符号只写在左侧，箭头右边会从「-20%」变成「20%」，读成由负变正。
+     把边界上的符号还回差异段，输出「…伤害[-50% → -20%]」 */
+  const isSym = ch => !!ch && /[-+－＋×*/／%％]/.test(ch);
+  /* 符号前一位是数字/百分号时（「100+150%」的 +）是连接号，不是正负号 */
+  const isLink = s => /[0-9%％.．]$/.test(s);
+  while (c.len > 1 && isSym(oldT[c.i + c.len - 1]) && isSym(newT[c.j + c.len - 1]) &&
+    !isLink(oldT.slice(0, c.i + c.len - 1)) && !isLink(newT.slice(0, c.j + c.len - 1))) c.len--;
+  while (c.len > 1 && isSym(oldT[c.i]) && isSym(newT[c.j])) { c.i++; c.j++; c.len--; }
+  if (c.len >= 3) {
+    const oa = oldT.slice(0, c.i), ob = oldT.slice(c.i + c.len);
+    const na = newT.slice(0, c.j), nb = newT.slice(c.j + c.len);
+    return bwSeg(oa, na) + oldT.slice(c.i, c.i + c.len) + bwSeg(ob, nb);
+  }
+  return '[' + oldT + ' → ' + newT + ']';
+}
+
+function bwEffLen(s) {
+  return (String(s).match(/[^\s，。；：、！？（）()【】\[\]]/g) || []).length;
+}
+
+function bwRenderPair(bs, as) {
+  /* 上游 stripAdjust 可能只去掉其中一侧的句末标点：先统一剥掉再比，
+     否则会多出一个「【删】。（删除）【/删】」，把标点当成改动内容 */
+  const endM = /[。！？]$/.test(as) ? as.slice(-1) : (/[。！？]$/.test(bs) ? bs.slice(-1) : '');
+  bs = bs.replace(/[。！？]$/, '');
+  as = as.replace(/[。！？]$/, '');
+  const rs = bwRuns(bwOps(bs, as));
+  const cs = bwMergeBridges(bwClusters(rs));
+  let out = '', changes = 0, changedChars = 0, lastSame = '';
+  for (const c of cs) {
+    if (c.type === 'same') { out += c.t; lastSame = c.t; continue; }
+    /* 数值符号被逐字 diff 当成公共字符时（「最终伤害-」+「50%」/「20%」），
+       符号只留在前一段，右侧会读成正数；把符号并回差异段
+       → 「…最终伤害[-50% → -20%]」 */
+    const symCh = lastSame.slice(-1);
+    /* 符号前一位是数字/百分号时（「100+150%」的 +）是连接号，不是正负号 */
+    if (c.type === 'rep' && c.oldT !== c.newT && /[-+－＋×*/／%％]/.test(symCh) &&
+        !/[0-9%％.．]/.test(lastSame.slice(-2, -1)) &&
+        /^[0-9]/.test(c.oldT) && /^[0-9]/.test(c.newT)) {
+      out = out.slice(0, -1);
+      c.oldT = symCh + c.oldT;
+      c.newT = symCh + c.newT;
+      lastSame = lastSame.slice(0, -1);
+    }
+    changes++;
+    changedChars += c.oldT.length + c.newT.length;
+    if (c.type === 'del') { out += '【删】' + c.oldT + '（删除）【/删】'; continue; }
+    if (c.type === 'add') { out += '【新增】' + c.newT + '（新增）【/新增】'; continue; }
+    out += bwRenderBlock(c.oldT, c.newT);
+  }
+  /* 纯标点的增删（句末「。」）不是把词拆开，不能据此判定碎片 */
+  const isPunct = t => /^[。！？；，、：:（）()【】\[\]\s]+$/.test(t);
+  const frag = cs.some(c => {
+    if (c.type === 'same') return false;
+    const l = c.oldT.length, r = c.newT.length;
+    /* 单字对单字（本 → 下、开 → 关）是完整替换，直接给箭头；
+       只有一侧单字、另一侧多字时才可能是把词拆开了 */
+    if (c.type === 'rep' && l === 1 && r === 1) return false;
+    return (l === 1 && !bwIsNum(c.oldT) && !isPunct(c.oldT)) ||
+      (r === 1 && !bwIsNum(c.newT) && !isPunct(c.newT));
+  });
+  const density = changedChars / Math.max(bs.length + as.length, 1);
+  /* 句子骨架是否稳定：开头/结尾有公共字，局部删改才读得顺；
+     两头都没有公共字的（香香那种整句重排），直接走整句箭头 */
+  const lim = Math.min(bs.length, as.length);
+  let p = 0;
+  while (p < lim && bs[p] === as[p]) p++;
+  let s = 0;
+  while (s < lim && bs[bs.length - 1 - s] === as[as.length - 1 - s]) s++;
+  const stable = bwEffLen(bs.slice(0, p)) >= 2 || bwEffLen(bs.slice(bs.length - s)) >= 3;
+  const safe = changes <= 6 && density <= 0.9 && !frag && stable;
+  return { txt: out + endM, safe };
+}
+
+/* 质量不足时的兜底：公共头/尾只写一次，其余整体回退。
+   不做小句配对、不做就地 [旧 → 新]，避免把两段不同的内容硬配成一对 */
+function bwAffixFallback(b0, a0) {
+  let b = b0, a = a0, end = '';
+  if (/[。！？]$/.test(b) && /[。！？]$/.test(a)) {
+    end = b.slice(-1);
+    b = b.slice(0, -1);
+    a = a.slice(0, -1);
+  }
+  const minLen = Math.min(b.length, a.length);
+  let p = 0;
+  while (p < minLen && b[p] === a[p]) p++;
+  while (p > 0 && bwEffLen(b.slice(0, p)) < 4) p--;
+  let s = 0;
+  while (s < minLen - p && b[b.length - 1 - s] === a[a.length - 1 - s]) s++;
+  while (s > 0 && bwEffLen(b.slice(b.length - s)) < 4) s--;
+  if (p + s >= minLen) { p = 0; s = 0; }
+  const head = p ? b.slice(0, p) : '';
+  const tail = s ? b.slice(b.length - s) : '';
+  const midB = b.slice(p, b.length - s);
+  const midA = a.slice(p, a.length - s);
+  if (!midB && !midA) return b0;
+  if (!midB) return head + '【新增】' + midA + '（新增）【/新增】' + tail + end;
+  if (!midA) return head + '【删】' + midB + '（删除）【/删】' + tail + end;
+  return head + '[' + midB + ' → ' + midA + ']' + tail + end;
+}
+
+/* 句级对齐：相似度低于 0.4 的不配对，按删/增处理 */
+function bwAlignSents(bs, as) {
+  const m = bs.length, n = as.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  const step = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(''));
+  for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) {
+    const s = bwSim(bs[i], as[j]);
+    const match = dp[i + 1][j + 1] + (s >= 0.4 ? s : -10);
+    let best = match, act = 'pair';
+    if (dp[i + 1][j] >= best) { best = dp[i + 1][j]; act = 'del'; }
+    if (dp[i][j + 1] >= best) { best = dp[i][j + 1]; act = 'add'; }
+    dp[i][j] = best; step[i][j] = act;
+  }
+  const out = []; let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (step[i][j] === 'pair') { out.push(['pair', i, j]); i++; j++; }
+    else if (step[i][j] === 'del') { out.push(['del', i++]); }
+    else { out.push(['add', j++]); }
+  }
+  while (i < m) out.push(['del', i++]);
+  while (j < n) out.push(['add', j++]);
+  /* 「新增句」排在「删除句」前面读更顺 */
+  for (let k = 0; k < out.length - 1; k++) {
+    if (out[k][0] === 'add' && out[k + 1][0] === 'del') {
+      const t = out[k]; out[k] = out[k + 1]; out[k + 1] = t;
+    }
+  }
+  return out;
+}
+
+function renderBigRewrite(b, a) {
+  /* 「第一名：」「10级：」这类两侧共用的短标签提到箭头前，不再各写一遍 */
+  let tag = '';
+  const M = Math.min(b.length, a.length);
+  let p = 0;
+  while (p < M && b[p] === a[p]) p++;
+  const colon = b.slice(0, p).match(/^[\s\S]*[：:]/);
+  if (colon && b.slice(0, p).length - colon[0].length <= 3) tag = colon[0];
+  const bs = sentences(b.slice(tag.length)), as = sentences(a.slice(tag.length));
+  const steps = bwAlignSents(bs, as);
+  let out = '';
+  for (const st of steps) {
+    if (st[0] === 'del') { out += '【删】' + bs[st[1]] + '（删除）【/删】'; continue; }
+    if (st[0] === 'add') { out += '【新增】' + as[st[1]] + '（新增）【/新增】'; continue; }
+    const x = bs[st[1]], y = as[st[2]];
+    if (x === y) { out += x; continue; }
+    const r = bwRenderPair(x, y);
+    out += r.safe ? r.txt : bwAffixFallback(x, y);
+  }
+  return tag + out;
 }
 

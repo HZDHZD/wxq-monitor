@@ -217,20 +217,47 @@ function descArrs(s) {
 function markChangedVals(text, lines) {
   let t = String(text || '');
   if (!t) return t;
-  /* 重复跑时先清掉上一次的标记，避免套娃 */
-  t = t.split(VAL_OPEN).join('').split(VAL_CLOSE).join('');
-  /* 整句两版的大改写（bigRewrite）：两侧照抄，哪个数都不算「改」，
-     记下区间，区间里的数字一律不标金 */
-  const bigs = [];
-  for (let bi = 0; bi >= 0;) {
-    bi = t.indexOf(BIG_OPEN, bi);
-    if (bi < 0) break;
-    const bc = t.indexOf(BIG_CLOSE, bi);
-    if (bc < 0) break;
-    bigs.push([bi, bc + BIG_CLOSE.length]);
-    bi = bc + BIG_CLOSE.length;
+  /* 整句两版的大改写（bigRewrite）：区间内不清理已有标记，
+     避免 renderBigRewrite 自己标好的【改】被抹掉（下面按同一套规则补标） */
+  const findBigs = s => {
+    const arr = [];
+    for (let bi = 0; bi >= 0;) {
+      bi = s.indexOf(BIG_OPEN, bi);
+      if (bi < 0) break;
+      const bc = s.indexOf(BIG_CLOSE, bi);
+      if (bc < 0) break;
+      arr.push([bi, bc + BIG_CLOSE.length]);
+      bi = bc + BIG_CLOSE.length;
+    }
+    return arr;
+  };
+  const scrub = s => s.split(VAL_OPEN).join('').split(VAL_CLOSE).join('');
+  const preBig = findBigs(t);
+  if (preBig.length) {
+    let out = '', last = 0;
+    for (const [a, b] of preBig) {
+      out += scrub(t.slice(last, a)) + t.slice(a, b);
+      last = b;
+    }
+    t = out + scrub(t.slice(last));
+  } else {
+    /* 重复跑时先清掉上一次的标记，避免套娃 */
+    t = scrub(t);
   }
-  const inBig = p => bigs.some(r => p >= r[0] && p < r[1]);
+  /* 大改写区间（BIG）整段不标金：两版几乎全重写（弹簧、香香），
+     箭头两侧本来就不是「同一个值的替换」，标了只会满屏金色；
+     区间内渲染器自己标的【改】（局部数值箭头，如武则天「0.75 → 0.4」）保留 */
+  const bigRanges = findBigs(t);
+  const inBig = p => bigRanges.some(r => p >= r[0] && p < r[1]);
+  const valRanges = [];
+  let vi = 0;
+  while ((vi = t.indexOf(VAL_OPEN, vi)) >= 0) {
+    const vc = t.indexOf(VAL_CLOSE, vi);
+    if (vc < 0) { valRanges.push([vi, t.length]); break; }
+    valRanges.push([vi, vc + VAL_CLOSE.length]);
+    vi = vc + VAL_CLOSE.length;
+  }
+  const inVal = p => valRanges.some(r => p >= r[0] && p < r[1]);
   const src = (lines || []).map(s => String(s));
   const pIdx = [];
   src.forEach((s, i) => { if (/^调整前/.test(s)) pIdx.push(i); });
@@ -393,6 +420,21 @@ function markChangedVals(text, lines) {
     /* 就地改写的行（整句只写一遍、箭头两边只放新值）：箭头旁边就是变化的那一小段，
        后面的共用文字（「…（至少1级）」）不属于右侧新值，不能拿来比 */
     const inline = /[\uE000\uE001]/.test(lineTxt);
+    /* 整句重写（两侧几乎不共用文字、本身就是一整句）：箭头两侧的数字没有
+       一一对应关系，右侧整段都是新内容，逐个标金会满屏金色（弹簧）。
+       与 BIG 区间同一口径：这种整段当大改写，整段不标金。
+       要在截数值段之前按整段判，截成「50%」「4」这种小串就没法比了 */
+    const lTxtR = t.slice(la, lb), rTxtR = t.slice(ra, rb);
+    const lLen = bwEffLen(lTxtR), rLen = bwEffLen(rTxtR);
+    /* 「整句重写」要求两版长度相近：压缩后箭头右侧常常只剩新增的短尾巴
+       （安琪拉「每0.1秒造成10% → 5+10%」），右边天然比左边短很多，
+       相似度低是正常压缩，不是重写，不能因此不标金 */
+    /* 箭头正好落在数值上（左边以数值结尾、右边以数值开头，安琪拉「每0.1秒造成10% → 5+10%」）：
+       这是同一个值的位置在改，不是整句重写，照常标金 */
+    const atVal = /[0-9%％]$/.test(lTxtR.trim()) && /^[0-9]/.test(rTxtR.trim());
+    const rew = !inline && !atVal && lLen >= 15 && rLen >= 15 &&
+      Math.abs(lLen - rLen) / Math.max(lLen, rLen) <= 0.4 &&
+      bwSim(lTxtR, rTxtR) < 0.35;
     if ((multi || inline) && !/[\/、]/.test(t.slice(la, rb))) {
       const lr0 = trailRun(la, lb), rr0 = leadRun(ra, rb);
       if (lr0) { la = lr0.a; lb = lr0.b; }
@@ -405,9 +447,12 @@ function markChangedVals(text, lines) {
     const seenTxt = tier ? t.slice(lineStart(la), lb) : lt;
     const lr = ctxRight(lt, tier, tier ? seenTxt : null);
     const ln = descNums(lt), lr2 = descArrs(lt), rn = descNums(rt), rr2 = descArrs(rt);
-    segs.push({ a: la, b: lb, side: 'L', num: ln, arr: lr2, otherNum: rn, otherArr: rr2,
-      afterNum: lr === null ? rn : descNums(lr), afterArr: lr === null ? rr2 : descArrs(lr) });
-    segs.push({ a: ra, b: rb, side: 'R', num: rn, arr: rr2, otherNum: ln, otherArr: lr2,
+    /* 找不到对应的调整后分句时留空，交给后面的整段数值集合回退；
+       不能拿右侧那一小段来比（「→ 回合开始时」里没有数字，会把左侧没变的
+       「1张」判成变化，大改写区间里就会凭空标金） */
+    segs.push({ a: la, b: lb, side: 'L', num: ln, arr: lr2, otherNum: rn, otherArr: rr2, rew,
+      afterNum: lr === null ? null : descNums(lr), afterArr: lr === null ? null : descArrs(lr) });
+    segs.push({ a: ra, b: rb, side: 'R', num: rn, arr: rr2, otherNum: ln, otherArr: lr2, rew,
       afterNum: null, afterArr: null });
   };
   const lineStart = p => { let i = p; while (i > 0 && !/[。！？\n]/.test(t[i - 1])) i--; return i; };
@@ -534,9 +579,11 @@ function markChangedVals(text, lines) {
       && /^级[\u4e00-\u9fa5]/.test(t.slice(pos + tok.length))
       && (pos === 0 || /[。；，、：\n]/.test(t[pos - 1]))
       && !segAt(pos);
-    if (!inBig(pos) && !inNew(pos) && !inDel(pos) && !tierHead && !/^\s*级[^\n。，；]{0,6}[：:]/.test(t.slice(pos + tok.length))) {
+    if (!inBig(pos) && !inVal(pos) && !inNew(pos) && !inDel(pos) && !tierHead && !/^\s*级[^\n。，；]{0,6}[：:]/.test(t.slice(pos + tok.length))) {
       const sg = segAt(pos);
-      if (sg && sg.otherNum) {
+      if (sg && sg.rew) {
+        /* 整句重写：两侧数字没有对应关系，不标 */
+      } else if (sg && sg.otherNum) {
         /* 左段的数字：右侧同一箭头里也写了、或它对应的那句调整后原文里本来就有
            （被压缩省略的共有内容，如暴君「200%攻速、100%暴击率并无敌 → 70%伤害减免」）→ 不算变化。
            右侧同理：两侧共有的句尾只写一次、落在箭头后面时，左段里就没有它，
@@ -547,7 +594,11 @@ function markChangedVals(text, lines) {
         const after = sg.side === 'R'
           ? (coR === null ? null
             : (isArr ? descArrs(coR) : descNums(coR.replace(/[0-9]+级[^0-9。，；]{0,6}[：:]/g, ''))))
-          : (isArr ? (sg.afterArr || rArr) : (sg.afterNum || rNum));
+          /* 匹配到的调整后分句里一个数字都没有时，回整段调整后不比：
+             这段匹配往往是错的（乘胜追击「→ 回合开始时」），
+             拿它比会把左侧没变的「1张」判成变化 */
+          : (isArr ? (sg.afterArr && sg.afterArr.size ? sg.afterArr : rArr)
+            : (sg.afterNum && sg.afterNum.size ? sg.afterNum : rNum));
         mark = !hit(isArr ? sg.otherArr : sg.otherNum) && !(after && hit(after));
       } else {
         /* 数字落在箭头分段之外（箭头所在的分句和这个数字不在同一句，
