@@ -6,3 +6,4 @@ window.LEX_SPECIAL = [
   "攻速加持模块"
 ];
 
+// watch-test
