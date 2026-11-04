@@ -397,6 +397,51 @@ function toggleNewMarks(raw, ss, se) {
   return { text: out, start: at[ps], end: beforeClose[pe] };
 }
 
+/* 人工标括号：把输入框里选中的一段文字包成 [ … ]（英文方括号）。
+   选中文字的外层已经是 [ … ] 时再点一次即取消，两个方括号一起去掉；
+   选中区间本身带着 [ ] 也按取消处理。方括号就是普通文字，出图时原样绘制。
+   选择边界落在标记字符中间时贴到标记外侧，避免把【新增】等标记切开 */
+function toggleBracket(raw, ss, se) {
+  const s = String(raw == null ? '' : raw);
+  const TOK = [MARK_OPEN, MARK_CLOSE, DEL_OPEN, DEL_CLOSE, VAL_OPEN, VAL_CLOSE];
+  /* 返回覆盖下标 i 的标记区间 [起点, 终点)；i 不在标记内部时起点=终点=i */
+  const tokAt = i => {
+    for (let p = Math.max(0, i - 5); p < i; p++) {
+      const t = TOK.find(t => s.startsWith(t, p) && p + t.length > i);
+      if (t) return [p, p + t.length];
+    }
+    return [i, i];
+  };
+  let S = Math.max(0, Math.min(ss, se)), E = Math.max(ss, se);
+  /* 起点落在标记内部 → 贴到标记起点；终点落在标记内部 → 贴到标记终点 */
+  S = tokAt(S)[0];
+  E = tokAt(E)[1];
+  if (E <= S) return { text: s, start: ss, end: se };
+
+  /* 取消：选中区间外面正好是一对方括号 */
+  if (S > 0 && E < s.length && s[S - 1] === '[' && s[E] === ']') {
+    return {
+      text: s.slice(0, S - 1) + s.slice(S, E) + s.slice(E + 1),
+      start: S - 1,
+      end: E - 1
+    };
+  }
+  /* 取消：选中区间自己就带着一对方括号 */
+  if (s[S] === '[' && s[E - 1] === ']' && s.slice(S + 1, E - 1).indexOf('[') < 0
+      && s.slice(S + 1, E - 1).indexOf(']') < 0) {
+    return {
+      text: s.slice(0, S) + s.slice(S + 1, E - 1) + s.slice(E),
+      start: S,
+      end: E - 2
+    };
+  }
+  return {
+    text: s.slice(0, S) + '[' + s.slice(S, E) + ']' + s.slice(E),
+    start: S + 1,
+    end: E + 1
+  };
+}
+
 /* 与 wrapText 相同的预处理：数字和量词之间不留空格、剥离新增标记 */
 function descPrepared(text) {
   return parseMarks(String(text == null ? '' : text)

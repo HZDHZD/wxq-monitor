@@ -346,6 +346,35 @@ if (elBtnNew) {
   });
 }
 
+/* ---------- 人工标括号：选中一段文字 → 包成英文方括号 [ … ]，再点一次取消 ---------- */
+let markTipTimerBr = 0;
+function markTipBr(msg) {
+  const btn = document.getElementById('btnBracket');
+  if (!btn) return;
+  if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+  clearTimeout(markTipTimerBr);
+  btn.textContent = msg;
+  markTipTimerBr = setTimeout(() => { btn.textContent = btn.dataset.label; }, 1400);
+}
+const elBtnBracket = document.getElementById('btnBracket');
+if (elBtnBracket) {
+  elBtnBracket.addEventListener('mousedown', e => e.preventDefault());
+  elBtnBracket.addEventListener('click', () => {
+    const act = document.activeElement;
+    const t = (act && act.matches && act.matches('textarea.id, textarea.kd'))
+      ? act : markTarget;
+    if (!t || !t.isConnected) { markTipBr('先选中文字'); return; }
+    const ss = t.selectionStart, se = t.selectionEnd;
+    if (se <= ss) { markTipBr('先选中文字'); return; }
+    const r = toggleBracket(t.value, ss, se);
+    if (r.text === t.value) return;
+    t.value = r.text;
+    t.dispatchEvent(new Event('input', { bubbles: true }));
+    t.focus();
+    t.setSelectionRange(r.start, r.end);
+  });
+}
+
 /* 按钮：增删 */
 elSections.addEventListener('click', e => {
   const btn = e.target.closest('[data-act]'); if (!btn) return;

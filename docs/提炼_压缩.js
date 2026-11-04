@@ -267,6 +267,19 @@ function compressPair(b, a) {
   const VAL_CH = /[0-9.%％]/;
   while (sb > 0 && sb < mn && VAL_CH.test(lb[lb.length - sb]) && VAL_CH.test(lb[lb.length - sb - 1])) sb--;
   const suf = lb.slice(lb.length - sb);
+  /* 调整前只剩一个触发条件、调整后这条规则后面还挂着另一条并列规则
+     （乘胜追击「战斗胜利时，获得1张高阶推演战术」→「回合开始时，获得1张推演·战术；
+     战斗胜利时，改为获得1张高阶推演战术」）：剥掉公共后缀后左边的「战斗胜利时」
+     会被读成只修饰右边第一句，其实是第二句的条件。这种整句两端全写 */
+  {
+    const lRes = lb.slice(0, lb.length - sb).replace(/[，,。；;、\s]+$/, '');
+    const rRes = la.slice(0, la.length - sb);
+    if (sb > 0 && sb < lb.length && /[；;]/.test(rRes) &&
+        !hasPred(lRes) && /(?:时|后|前)$/.test(lRes) && lRes.length >= 3) {
+      /* 整句两端全写＝整句大改写，按 bigRewrite 的口径不标金 */
+      return BIG_OPEN + b.replace(/[。；]\s*$/, '') + ' → ' + a + BIG_CLOSE;
+    }
+  }
   /* 调整后把调整前整句包住（庄周「护盾量提升至700，且技能范围扩大至全体友军」）：
      这时箭头两侧是包含关系而非替换关系，写成「原有效果且新增效果（新增）」 */
   if (sb >= lb.length && lb.length < la.length) {
