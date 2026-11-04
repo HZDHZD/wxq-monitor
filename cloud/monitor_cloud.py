@@ -36,8 +36,6 @@ BODY_STATE_PATH = BASE_DIR / "body_state.json"
 HEARTBEAT_PATH = BASE_DIR / "last_run.txt"
 # 上一版正文快照：改动时用来算 diff，提醒里直接显示改了哪几行
 SNAP_DIR = BASE_DIR / "body_snapshots"
-DIFF_MAX_LINES = 24
-DIFF_MAX_CHARS = 120
 
 # ===== 万象棋官网新闻接口（与本地版完全一致）=====
 API_URL = "https://apps.game.qq.com/cmc/cross"
@@ -190,12 +188,7 @@ def diff_lines(old: str, new: str) -> list:
         sign, body = raw[:1], raw[1:].strip()
         if sign not in "+-" or not body:
             continue
-        if len(body) > DIFF_MAX_CHARS:
-            body = body[:DIFF_MAX_CHARS] + "…"
         out.append(f"{sign} {body}")
-        if len(out) >= DIFF_MAX_LINES:
-            out.append(f"…（改动超过 {DIFF_MAX_LINES} 行，仅显示前 {DIFF_MAX_LINES} 行）")
-            break
     return out
 
 
@@ -282,7 +275,7 @@ def collect_body_changes(announcements: list):
                 lines = diff_lines(old_text, text)
                 if lines:
                     # 冷却内的多次改动按顺序累加，提醒后清空
-                    st["diff"] = ((st.get("diff") or []) + lines)[-DIFF_MAX_LINES:]
+                    st["diff"] = (st.get("diff") or []) + lines
                 log(f"✎ 正文有改动（第{st['count']}次）：{it['title']}  {it['time']}")
         write_snapshot(it["id"], text)
 
