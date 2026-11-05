@@ -115,17 +115,43 @@ function paintFlow(ctx, cfg, scale, oy, T) {
   const itPad   = m * T.itPad * s;
   /* 无标题条目（如问题修复）上下留白收窄，避免一张卡只放一行还占很高 */
   const itemPadY = (it) => String((it && it.t) || '').trim() ? itPad : itPad * 0.62;
+  /* 原文配图：按卡片文字宽度等比缩放，不放大；高度要算进卡片，否则会压到下一张 */
+  const picGapTop = Math.round(m * 0.024 * s);
+  const picGap    = Math.round(m * 0.020 * s);
+  const picBox = (im, maxW) => {
+    const nw = im.naturalWidth || maxW, nh = im.naturalHeight || maxW * 0.6;
+    const w = Math.min(maxW, nw);
+    return { w, h: Math.round(w * nh / nw) };
+  };
+  const picsH = (it, maxW) => {
+    const ims = itemImgs(it);
+    if (!ims.length) return 0;
+    return picGapTop + ims.reduce((a, im, i) => a + picBox(im, maxW).h + (i ? picGap : 0), 0);
+  };
+  const drawPics = (it, x, yy, maxW) => {
+    const ims = itemImgs(it);
+    if (!ims.length) return yy;
+    let py = yy + picGapTop;
+    ims.forEach(im => {
+      const b = picBox(im, maxW);
+      ctx.drawImage(im, x + Math.round((maxW - b.w) / 2), py, b.w, b.h);
+      py += b.h + picGap;
+    });
+    return py - picGap;
+  };
   const itPadR = Math.max(0, (W - pad - bodyPad - safeR) - itPad - W * T.itRight);
   /* 条目文字右边界固定落在画面宽度 T.itRight 处（与内容无关），右侧全部留白 */
   const itR     = m * T.itR * s;
   const itGap   = m * T.itGap * s;
   const itIndent= (!T.card && T.itBullet) ? m * 0.028 * s : 0;
   const footS   = m * T.footS * s;
-  /* 内容页底部一行：标语 + 互动引导，字号跟正文一致，居中；署名在卡片右下方橙色区 */
+  /* 内容页底部一行：标语 + 互动引导，字号固定不随正文放大，居中；署名在卡片右下方橙色区 */
   const ctaText    = String(cfg.cta || '').trim();
   const sloganText = String(cfg.slogan || '').trim();
   const tipText    = [sloganText, ctaText].filter(Boolean).join('｜');
-  const tipRes     = tipText ? (itS + m * 0.032 * s) : 0;
+  /* 底部标语行的字号固定按用户设定值：不跟着「凑满三页」的正文放大倍数一起变大 */
+  const tipS       = m * T.itS * fixedScale;
+  const tipRes     = tipText ? (tipS + m * 0.032 * fixedScale) : 0;
 
   const innerW = cw - bodyPad * 2 - safeR;                   /* 内容缩进，避开右侧互动按钮列 */
   const cols = (W > H * 1.15) ? 2 : 1;
@@ -273,7 +299,7 @@ function paintFlow(ctx, cfg, scale, oy, T) {
     const bodyH = (sl.length + dl.length) * itLh;
     /* 技能块与正文之间留出明显间距，避免技能看起来像正文的续行 */
     const kgap = (kh && bodyH) ? Math.round(kidGapY * 1.6) : 0;
-    const textH = bodyH + kgap + kh;
+    const textH = bodyH + kgap + kh + picsH(it, twx);
     return { ak, sp, iw, ih, twx, sl, dl, kms, kh, kgap, textH, h: Math.max(itPad * 2 + textH, ih + itPad * 2) };
   };
   const measureImg = (it, w, pw) => imgMetrics(it, w, pw).h;
@@ -415,7 +441,7 @@ function paintFlow(ctx, cfg, scale, oy, T) {
             const dl = dt ? wrapText(ctx, dt, tw0) : [];
             const kh = kidsBlockH(measureKids(it, tw0));
             const kgap = (kh && (tl.length + dl.length)) ? Math.round(kidGapY * 1.2) : 0;
-            return (tl.length + dl.length) * itLh + itemPadY(it) * 2 + kgap + kh;
+            return (tl.length + dl.length) * itLh + itemPadY(it) * 2 + kgap + kh + picsH(it, tw0);
           });
           rs.forEach(r => r.cells.forEach(c => { c.tw = tw0; }));
           rows.push(...rs);
@@ -460,7 +486,7 @@ function paintFlow(ctx, cfg, scale, oy, T) {
         const kgap = (kh && (tl.length + dl.length)) ? Math.round(kidGapY * 1.2) : 0;
         return {
           cells: [{ it, kind: 'txt', w: gridW, tw: tw0, h: 0 }],
-          h: (tl.length + dl.length) * itLh + itemPadY(it) * 2 + kgap + kh
+          h: (tl.length + dl.length) * itLh + itemPadY(it) * 2 + kgap + kh + picsH(it, tw0)
         };
       });
       blocks.push({ type: 'rows', rows });
@@ -660,8 +686,9 @@ function paintFlow(ctx, cfg, scale, oy, T) {
     if (mt.kms.length) {
       if (sl.length || dl.length) yy += mt.kgap;
       setFont(ctx, itS, 400);
-      drawKids(mt.kms, tx, yy);
+      yy = drawKids(mt.kms, tx, yy);
     }
+    drawPics(c.it, tx, yy, mt.twx);
   };
 
   /* --- 正文 --- */
@@ -799,6 +826,7 @@ function paintFlow(ctx, cfg, scale, oy, T) {
             if (hadText) yy += Math.round(kidGapY * 1.2);
             drawKids(kms, tx, yy);
           }
+          drawPics(c.it, tx, yy, twx);
         });
         y += r.h + (i < b.rows.length - 1 ? itGap : 0);
       });
@@ -806,12 +834,14 @@ function paintFlow(ctx, cfg, scale, oy, T) {
     prev = b.type;
   });
 
-  /* 底部一行：标语 + 互动引导，与正文同字号、居中 */
+  /* 底部一行：标语 + 互动引导，字号固定用用户设定值，居中；
+     位置从卡片底边（多页统一对齐）往上固定一截，不跟着正文放大倍数上下跑 */
   if (tipText) {
-    setFont(ctx, itS, 600);
+    setFont(ctx, tipS, 600);
     ctx.textAlign = 'center';
     ctx.fillStyle = T.footColor;
-    ctx.fillText(tipText, W / 2, bodyTop + bodyH - bodyPad - itS);
+    const tipPadB = m * T.bodyPad * fixedScale;
+    ctx.fillText(tipText, W / 2, bodyTop + bodyH - tipPadB - tipS);
     ctx.textAlign = 'left';
   }
   /* 署名：卡片下方橙色区，右下角 */

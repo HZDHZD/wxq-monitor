@@ -38,6 +38,8 @@ function parseNotice(html) {
      后面的章节都是局外，完全照抄原文：不配对调整前后、不压箭头、不标金 */
   let coreOpened = false;
   let flatBuf = [];
+  /* 还没落到条目上的图片：原文开头的图、或分组刚开还没条目时的图，挂给下一条 */
+  let pendingPics = [];
 
   const openSec = name => {
     const nm = clean(name);
@@ -193,8 +195,29 @@ function parseNotice(html) {
         /* 前面已有「新增：」时，天赋名里的冒号改用间隔号，避免一行两个冒号 */
         it.t = '新增：' + it.t.replace(/^([^：:]{1,12})[：:]\s*(\S.{0,12})$/, '$1 · $2');
       }
+      /* 之前攒下的图片挂到这一条上（原文开头的图、或分组刚开时的图） */
+      const pre = [];
+      if (pendingPics.length) { pre.push(...pendingPics); pendingPics = []; }
+      if (grp._pics && grp._pics.length) { pre.push(...grp._pics); grp._pics = []; }
+      if (pre.length) it.imgs = (it.imgs || []).concat(pre);
       grp.items.push(it);
     });
+  };
+
+  /* 图片没有文字，按原文顺序挂到它前面那条内容上；前面还没有条目时挂给下一条 */
+  const attachPics = imgs => {
+    const list = (imgs || []).filter(Boolean);
+    if (!list.length) return;
+    let last = null;
+    if (grp && grp.items.length) {
+      for (let k = grp.items.length - 1; k >= 0; k--) {
+        /* 三级标签卡只是胶囊，图片挂在它前面的内容卡上 */
+        if (!grp.items[k].sub) { last = grp.items[k]; break; }
+      }
+    }
+    if (last) { last.imgs = (last.imgs || []).concat(list); return; }
+    if (grp) { grp._pics = (grp._pics || []).concat(list); return; }
+    pendingPics = pendingPics.concat(list);
   };
 
   /* 平铺公告：把攒下的连续行按「标题 + 正文」一次分条。
@@ -240,6 +263,9 @@ function parseNotice(html) {
       return;
     }
     if (tag !== 'P') return;
+    /* 这一段的图片单独收集，段落解析完再挂到它前面那条内容上 */
+    const pPics = picsIn(el);
+    (() => {
     let lines = linesOf(el, secRaw === 'plain');
     /* 有的公告整篇没有 H1/H2/H3，分类标题只是段落首行的整行加粗
        （「棋手调整 / 天赋调整 / 英雄调整…」）。整行加粗、够短、没有句末标点、
@@ -338,6 +364,8 @@ function parseNotice(html) {
     }
 
     pushItems(makeItems(lines, grp.name, chessScope(), false, markNew, guessNames, secRaw));
+    })();
+    if (pPics.length) attachPics(pPics);
   });
   walk(host);
 

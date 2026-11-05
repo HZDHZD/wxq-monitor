@@ -100,6 +100,27 @@ function noticeRawHtml(html) {
   return host.innerHTML;
 }
 
+/* 公告正文里的图片：相对地址补成绝对地址，规则和右侧原文栏一致 */
+function absImgUrl(src) {
+  let u = String(src || '').trim();
+  if (!u) return '';
+  if (u.indexOf('//') === 0) u = 'https:' + u;
+  else if (u[0] === '/') u = RAW_HTML_BASE.replace(/\/$/, '') + u;
+  else if (!/^(https?:|data:)/i.test(u)) {
+    try { u = new URL(u, RAW_HTML_BASE).href; } catch (_) { /* 拼不出来就原样 */ }
+  }
+  return u;
+}
+
+/* 段落里出现的图片（按原文顺序）：图片本身没有文字，解析时单独收集，
+   挂到它前面那条内容上，出图端画在卡片里 */
+function picsIn(el) {
+  if (!el || !el.querySelectorAll) return [];
+  return Array.from(el.querySelectorAll('img'))
+    .map(img => absImgUrl(img.getAttribute('src')))
+    .filter(Boolean);
+}
+
 function setStatus(msg, type) {
   const el = $('#status');
   el.textContent = msg || '';

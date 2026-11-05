@@ -145,7 +145,9 @@ function render(sections, meta) {
       html += '<div class="grp" data-name="' + esc(g.name) + '">';
       html += '<div class="grpHead"><input type="checkbox" class="headCk ckGrp" checked>' + esc(g.name) + '</div>';
       g.items.forEach(it => {
-        html += '<label class="item" data-src="' + esc(it.src || '') + '">'
+        const pics = Array.isArray(it.imgs) ? it.imgs.filter(Boolean) : [];
+        html += '<label class="item" data-src="' + esc(it.src || '') + '"'
+          + (pics.length ? ' data-imgs="' + esc(JSON.stringify(pics)) + '"' : '') + '>'
           + '<input type="checkbox" class="ck" checked>'
           + '<div class="body">'
           + '<div class="tline">'
@@ -213,12 +215,22 @@ function collect() {
         const sub = !!itEl.querySelector('.sb').checked;
         /* 原句随条目一起带出去，出图页点「原文」不用再联网 */
         const src = String(itEl.dataset.src || '').trim();
+        /* 条目对应的原文图片，出图端画在卡片里 */
+        let imgs = [];
+        try { imgs = JSON.parse(itEl.dataset.imgs || '[]'); } catch (_) { /* 脏数据就当没图 */ }
+        imgs = (Array.isArray(imgs) ? imgs : []).filter(Boolean);
         /* 三级标签只画胶囊，说明文字要另起一条，否则会被静默丢掉 */
         if (sub && t) {
           items.push({ t, d: '', sub: true });
           if (d) items.push(src ? { t: '', d, src } : { t: '', d });
+          /* 图片跟着说明走；没有说明时跟着标签本身 */
+          if (imgs.length) items[items.length - 1].imgs = imgs;
         }
-        else if (t || d) items.push(src ? { t, d, src } : { t, d });
+        else if (t || d) {
+          const item = src ? { t, d, src } : { t, d };
+          if (imgs.length) item.imgs = imgs;
+          items.push(item);
+        }
       });
       if (items.length) sec.groups.push({ name: gEl.dataset.name, items });
     });

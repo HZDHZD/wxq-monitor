@@ -792,22 +792,30 @@ function parseJSONSections(text) {
         const d = String(it.d == null ? '' : it.d).trim();
         /* 原句（提炼页带出来的）整条保留，出图页的「原文」按钮要用 */
         const src = String(it.src == null ? '' : it.src).trim();
+        /* 条目对应的原文图片：画在卡片里，导入 / 自动填充都原样带过去 */
+        const imgs = Array.isArray(it.imgs) ? it.imgs.map(u => String(u || '').trim()).filter(Boolean) : [];
         /* 已是「棋手 + 技能子条目」结构时原样保留，一个棋手可挂多个技能 */
         const kids = Array.isArray(it.kids) ? it.kids
           .map(k => {
             const kt = String(k.t == null ? '' : k.t).trim();
             const kd = String(k.d == null ? '' : k.d).trim();
             const ks = String(k.src == null ? '' : k.src).trim();
-            return ks ? { t: kt, d: kd, src: ks } : { t: kt, d: kd };
+            const ki = Array.isArray(k.imgs) ? k.imgs.map(u => String(u || '').trim()).filter(Boolean) : [];
+            const kid = ks ? { t: kt, d: kd, src: ks } : { t: kt, d: kd };
+            if (ki.length) kid.imgs = ki;
+            return kid;
           })
           .filter(k => k.t || k.d) : [];
         if (!t && !d && !kids.length) return;
         const base = src ? { t, d, src } : { t, d };
+        if (imgs.length) base.imgs = imgs;
         if (kids.length) items.push(Object.assign(base, { kids }));
         /* 三级标签只画胶囊，说明另起一条，避免导入时把描述丢掉 */
         else if (it.sub && t) {
           items.push({ t, d: '', sub: true });
           if (d) items.push({ t: '', d });
+          /* 图片跟着说明走；没有说明时跟着标签本身 */
+          if (imgs.length) items[items.length - 1].imgs = imgs;
         } else items.push(base);
       });
       if (items.length) groups.push({ name: String(g.name || '').trim(), items });

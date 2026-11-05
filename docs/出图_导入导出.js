@@ -151,6 +151,8 @@ function importInto(tipEl) {
   closeImportFold();
   pageIdx = 0;
   buildEditor(); render();
+  /* 原文配图先拉下来（拿到尺寸才能算高度），加载完自动重排一次 */
+  preloadNoticeImgs(secs);
 
   const g = secs.reduce((a, s) => a + s.groups.length, 0);
   const n = secs.reduce((a, s) => a + s.groups.reduce((b, x) => b + x.items.length, 0), 0);
@@ -390,10 +392,14 @@ async function doExport(choice) {
     applyPartFilter();
     render();
   };
+  /* 原文配图没加载完就导出，导出的版面会缺图：等一等再重排 */
+  const waitingPics = Object.keys(NOTICE_IMG_TASKS).length > 0;
+  if (waitingPics) btn.textContent = '等配图加载…';
+  await noticeImgsReady();
   render();   /* 顺便清掉输入防抖，保证导出的是最新内容 */
   const ctx = cv.getContext('2d');
   const total = pagesCache.length;
-  if (!total) { restore(); return; }
+  if (!total) { btn.textContent = label; btn.disabled = false; restore(); return; }
   /* 分套时这一篇只有封面 = 还没有正文，出一张孤零零的封面没有意义 */
   if (state.split && total === 1) {
     clearTimeout(exportResetTimer);

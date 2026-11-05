@@ -606,3 +606,83 @@ function layoutGrid(items, cols, colW, measure) {
   }
   return rows;
 }
+
+/* =======================  公告原文图片  ======================= */
+/* 原文配图要画进 canvas，导出 PNG 靠 toBlob：图片跨域会让 canvas 变「脏」、导出直接失败，
+   所以图片一律带 crossOrigin 加载。图床不放行 CORS 的（腾讯公告图床只给官网域名）走一次图片代理，
+   代理回来的图同样可以导出；拿不到的图就只画文字，不画裂图 */
+const NOTICE_IMGS = Object.create(null);        /* 原地址 → 已加载的 <img> */
+const NOTICE_IMG_TASKS = Object.create(null);   /* 原地址 → 加载中的 Promise */
+const NOTICE_IMG_FAIL = Object.create(null);    /* 两次都失败的地址，不再反复重试 */
+const NOTICE_IMG_BAD_HOST = Object.create(null);
+
+function noticeImgProxy(url) {
+  return 'https://wsrv.nl/?url=' + encodeURIComponent(url) + '&output=png';
+}
+
+function loadNoticeImg(u) {
+  const url = String(u || '').trim();
+  if (!url) return Promise.resolve(null);
+  if (NOTICE_IMGS[url]) return Promise.resolve(NOTICE_IMGS[url]);
+  if (NOTICE_IMG_FAIL[url]) return Promise.resolve(null);
+  if (NOTICE_IMG_TASKS[url]) return NOTICE_IMG_TASKS[url];
+  let host = '';
+  try { host = new URL(url, location.href).host; } catch (_) { /* 相对地址按当前页算 */ }
+  const task = new Promise(resolve => {
+    const attempt = (src, viaProxy) => {
+      const im = new Image();
+      im.crossOrigin = 'anonymous';
+      im.onload = () => { NOTICE_IMGS[url] = im; delete NOTICE_IMG_TASKS[url]; resolve(im); };
+      im.onerror = () => {
+        if (!viaProxy) {
+          if (host) NOTICE_IMG_BAD_HOST[host] = true;
+          attempt(noticeImgProxy(url), true);
+          return;
+        }
+        NOTICE_IMG_FAIL[url] = true;
+        delete NOTICE_IMG_TASKS[url];
+        resolve(null);
+      };
+      im.src = src;
+    };
+    const useProxy = !!NOTICE_IMG_BAD_HOST[host];
+    attempt(useProxy ? noticeImgProxy(url) : url, useProxy);
+  });
+  NOTICE_IMG_TASKS[url] = task;
+  return task;
+}
+
+/* 条目能画的图（只认加载成功的；续页尾段不重复画，避免跨页出现两张一样的图） */
+function itemImgs(it) {
+  if (!it || it.splitTail || !Array.isArray(it.imgs)) return [];
+  return it.imgs
+    .map(u => NOTICE_IMGS[String(u || '').trim()])
+    .filter(im => im && im.naturalWidth);
+}
+
+/* 一篇公告里所有图片地址（含棋手技能子条目） */
+function noticeImgUrls(sections) {
+  const out = [];
+  const seen = Object.create(null);
+  const take = it => {
+    (Array.isArray(it && it.imgs) ? it.imgs : []).forEach(u => {
+      const s = String(u || '').trim();
+      if (s && !seen[s]) { seen[s] = true; out.push(s); }
+    });
+    (Array.isArray(it && it.kids) ? it.kids : []).forEach(take);
+  };
+  (sections || []).forEach(sec => (sec.groups || []).forEach(g => (g.items || []).forEach(take)));
+  return out;
+}
+
+/* 导入后先把图拉下来；加载完成会自动重排（图片高度要算进卡片） */
+function preloadNoticeImgs(sections) {
+  const urls = noticeImgUrls(sections);
+  if (!urls.length) return Promise.resolve();
+  return Promise.all(urls.map(loadNoticeImg)).then(() => { scheduleRender(); });
+}
+
+/* 导出前等所有图加载完，否则导出的是没图的版面 */
+function noticeImgsReady() {
+  return Promise.all(Object.keys(NOTICE_IMG_TASKS).map(u => NOTICE_IMG_TASKS[u]));
+}
