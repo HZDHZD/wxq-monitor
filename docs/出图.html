@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<!DOCTYPE html>
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -166,6 +166,22 @@
   .kidMain .kt { margin-bottom: 6px; }
   .kidOps { flex: none; display: flex; flex-direction: column; gap: 3px; }
   .kidAdd { margin-top: 0; }
+  /* 条目配图：公告原文带下来的图 + 手动「添加图片」选进来的图，缩略图可逐张删除 */
+  .imgBox {
+    margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  }
+  .imgThumb { position: relative; display: block; }
+  .imgThumb img {
+    display: block; height: 54px; max-width: 130px; object-fit: cover;
+    border: 1px solid #333a4a; border-radius: 6px; background: #151922;
+  }
+  .imgDel {
+    position: absolute; top: -6px; right: -6px; width: 17px; height: 17px; padding: 0;
+    border: none; border-radius: 50%; background: #3a2430; color: #ff8a9c;
+    font-family: inherit; font-size: 10px; line-height: 1; cursor: pointer;
+  }
+  .imgDel:hover { background: #55293a; color: #fff; }
+  .imgAdd { width: auto; margin-top: 0; padding: 7px 12px; flex: none; }
 
   /* ---- 三级编辑器 ---- */
   .secBox {
@@ -616,7 +632,7 @@
 <script src="出图_状态.js?v=20261111a"></script>
 <script src="出图_排版.js?v=20261110a"></script>
 <script src="出图_分页.js?v=20261111a"></script>
-<script src="出图_交互.js?v=20261111a"></script>
+<script src="出图_交互.js?v=20261111b"></script>
 <script src="出图_导入.js?v=20261105a"></script>
 <script src="出图_数值表.js?v=20261104k"></script>
 <script src="出图_导入导出.js?v=20261110a"></script>

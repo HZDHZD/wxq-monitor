@@ -168,6 +168,10 @@ function buildEditor() {
               ? `<div class="field"><textarea class="itbl" rows="${Math.max(3, (it.table.rows || []).length + 1)}" placeholder="每行：名称 | 调整前 | 调整后">${esc((it.table.rows || []).map(r => r.join(' | ')).join('\n'))}</textarea></div>`
               : `<div class="field"><textarea class="id" rows="2" placeholder="一句话说明（Enter 换行）">${esc(it.d)}</textarea></div>`}
             ${canKid ? `<div class="kidBox">${kidHtml}<button class="miniAdd kidAdd" data-act="addKid">+ 添加技能</button></div>` : ''}
+            <div class="imgBox">
+              ${(Array.isArray(it.imgs) ? it.imgs : []).map((u, mi) => `<span class="imgThumb" title="第 ${mi + 1} 张配图"><img src="${esc(u)}" alt=""><button class="imgDel" data-act="delImg" data-mi="${mi}" title="删除这张图">✕</button></span>`).join('')}
+              <button class="miniAdd imgAdd" data-act="addImg">+ 添加图片</button>
+            </div>
           </div>`;
         gbody.appendChild(row);
       });
@@ -464,6 +468,16 @@ elSections.addEventListener('click', e => {
     const to = ii + (act === 'upItem' ? -1 : 1);
     if (to < 0 || to >= arr.length) return;
     [arr[ii], arr[to]] = [arr[to], arr[ii]];
+  } else if (act === 'addImg' && si >= 0 && gi >= 0 && ii >= 0) {
+    /* 选图是异步的：先把条目对象记下来，选完再往它身上挂图 */
+    openImgPicker(state.sections[si].groups[gi].items[ii]);
+    return;
+  } else if (act === 'delImg' && si >= 0 && gi >= 0 && ii >= 0) {
+    const item = state.sections[si].groups[gi].items[ii];
+    const mi = parseInt(btn.dataset.mi, 10);
+    if (!(mi >= 0) || !Array.isArray(item.imgs) || mi >= item.imgs.length) return;
+    item.imgs.splice(mi, 1);
+    if (!item.imgs.length) delete item.imgs;
   } else if (act === 'addKid' || act === 'delKid' || act === 'upKid' || act === 'downKid') {
     if (si < 0 || gi < 0 || ii < 0) return;
     const item = state.sections[si].groups[gi].items[ii];
@@ -511,6 +525,66 @@ elSections.addEventListener('click', e => {
   }
 });
 
+/* =======================  手动添加配图  ======================= */
+/* 选进来的图统一转成 dataURL 存进条目的 imgs：导出画布不会因为跨域变脏，图也能跟着 JSON 走。
+   超过 600KB 的图先缩到 1400 宽，避免条目里塞进太大的 base64 */
+let imgPickInput = null;
+let imgPickTarget = null;
+
+function imageFileToDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(fr.error || new Error('读图失败'));
+    fr.onload = () => {
+      const raw = String(fr.result || '');
+      if (file.size <= 600 * 1024) { resolve(raw); return; }
+      const im = new Image();
+      im.onload = () => {
+        const maxW = 1400;
+        const nw = im.naturalWidth || maxW, nh = im.naturalHeight || maxW;
+        const k = Math.min(1, maxW / nw);
+        const w = Math.max(1, Math.round(nw * k)), h = Math.max(1, Math.round(nh * k));
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        cv.getContext('2d').drawImage(im, 0, 0, w, h);
+        resolve(cv.toDataURL(file.type === 'image/png' ? 'image/png' : 'image/jpeg', 0.92));
+      };
+      im.onerror = () => reject(new Error('读图失败'));
+      im.src = raw;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+
+/* 点「+ 添加图片」：弹一次文件选择，可以多选；选完挂到条目上并重排 */
+function openImgPicker(item) {
+  if (!imgPickInput) {
+    imgPickInput = document.createElement('input');
+    imgPickInput.type = 'file';
+    imgPickInput.accept = 'image/*';
+    imgPickInput.multiple = true;
+    imgPickInput.style.display = 'none';
+    document.body.appendChild(imgPickInput);
+    imgPickInput.addEventListener('change', async () => {
+      const files = [...(imgPickInput.files || [])];
+      const target = imgPickTarget;
+      imgPickInput.value = '';
+      if (!target || !files.length) return;
+      const urls = [];
+      for (const f of files) {
+        try { urls.push(await imageFileToDataURL(f)); } catch (_) { /* 读不了的图跳过 */ }
+      }
+      if (!urls.length) return;
+      target.imgs = (Array.isArray(target.imgs) ? target.imgs : []).concat(urls);
+      /* 先把尺寸解码出来，卡片高度才能算对，再重排 */
+      await Promise.all(urls.map(loadNoticeImg));
+      buildEditor(); render();
+    });
+  }
+  imgPickTarget = item;
+  imgPickInput.click();
+}
+
 /* 拖动换位：按住卡片空白处（或标题栏）就能拖，不用精确对准小把手；
    输入框、按钮等交互控件上按下不触发拖动 */
 let dragCtx = null;
@@ -521,7 +595,7 @@ function domIndex(parent, el, sel) {
 }
 
 function dragTarget(node) {
-  if (node.closest('input, textarea, select, button, a, label')) return null;
+  if (node.closest('input, textarea, select, button, a, label, .imgBox')) return null;
   const row = node.closest('.itemRow');
   if (row) return { el: row, sel: '.itemRow' };
   const grp = node.closest('.grpBox');
