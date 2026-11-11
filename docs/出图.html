@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<!DOCTYPE html>
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -50,6 +50,7 @@
   #btnAudit.on { color: #14161c; background: #d8a94e; border-color: #d8a94e; }
   #btnAudit.on.ok { background: #6fae7f; border-color: #6fae7f; }
   #btnSort.on { color: #fff; background: var(--accent); border-color: var(--accent); }
+  #btnSplit.on { color: #14161c; background: #d8a94e; border-color: #d8a94e; }
   #panelHead p { font-size: 12px; color: var(--sub); margin-top: 4px; }
 
   #panelBody { flex: 1; overflow-y: auto; padding: 16px 18px 20px; }
@@ -220,6 +221,16 @@
     color: var(--text); font-family: inherit; outline: none;
   }
   .grpHead input:focus { border-color: var(--accent); }
+  /* 分组头里的「并入」：点亮 = 和上一组共用一张封面 */
+  .joinBtn {
+    flex: none; padding: 3px 6px; border: 1px solid #3a4254; border-radius: 5px;
+    background: transparent; color: #7d879c; font-family: inherit;
+    font-size: 10px; font-weight: 700; line-height: 1.4; cursor: pointer;
+  }
+  .joinBtn:hover { border-color: #6b5a2a; color: #ffe45c; }
+  .joinBtn.on { background: #5a4a1c; border-color: #7a6425; color: #ffe45c; }
+  .joinBtn:disabled { opacity: .3; cursor: not-allowed; }
+  .joinBtn:disabled:hover { border-color: #3a4254; color: #7d879c; background: transparent; }
   .grpBox > .grpBody { padding: 9px; }
 
   .iconBtn {
@@ -499,6 +510,7 @@
         <button id="btnNew" class="headBtn" type="button" title="在说明框里选中一段文字，点这里标增；再点一次取消">标增</button>
         <button id="btnBracket" class="headBtn" type="button" title="在说明框里选中一段文字，点这里包成英文方括号 [ ]；再点一次取消">标括号</button>
         <button id="btnSort" class="headBtn" type="button">排序视图</button>
+        <button id="btnSplit" class="headBtn" type="button" title="关：局内 / 局外各出一篇；开：每个分组单独出图，可用分组上的「并入」把几组并成一套">分套</button>
         <button id="btnAudit" class="headBtn" type="button" hidden>质检</button>
       </div>
     </div>
@@ -561,7 +573,7 @@
       <div id="importTip1"></div>
     </div>
 
-    <div class="label topGap">重点内容 <span class="hint">拖卡片换位，▲▼ 一格一格挪</span></div>
+    <div class="label topGap">重点内容 <span class="hint">拖卡片换位，▲▼ 一格一格挪</span><span id="setSum" class="hint"></span></div>
     <div id="sections"></div>
 
   </div>
@@ -570,10 +582,10 @@
     <button id="btnExport">导出</button>
 
     <div id="exportMenu" class="popMenu" hidden>
-      <div class="pmHead">导出哪一篇？</div>
-      <button type="button" data-k="in">局内平衡篇</button>
-      <button type="button" data-k="out">局外更新篇</button>
-      <button type="button" data-k="all">合并全部（不带篇名）</button>
+      <div class="pmHead">导出范围（每个分组独立成篇）</div>
+      <button type="button" data-k="in">局内 · 全部分组</button>
+      <button type="button" data-k="out">局外 · 全部分组</button>
+      <button type="button" data-k="all">全部（局内 + 局外）</button>
     </div>
   </div>
 </div>
@@ -601,12 +613,12 @@
 <script src="特殊库.js"></script>
 <script src="出图_基础.js?v=20261105a"></script>
 <script src="出图_立绘.js?v=20261106a"></script>
-<script src="出图_状态.js?v=20261104k"></script>
-<script src="出图_排版.js?v=20261105c"></script>
-<script src="出图_分页.js?v=20261104k"></script>
-<script src="出图_交互.js?v=20261105a"></script>
+<script src="出图_状态.js?v=20261111a"></script>
+<script src="出图_排版.js?v=20261110a"></script>
+<script src="出图_分页.js?v=20261111a"></script>
+<script src="出图_交互.js?v=20261111a"></script>
 <script src="出图_导入.js?v=20261105a"></script>
 <script src="出图_数值表.js?v=20261104k"></script>
-<script src="出图_导入导出.js?v=20261105a"></script>
+<script src="出图_导入导出.js?v=20261110a"></script>
 </body>
 </html>

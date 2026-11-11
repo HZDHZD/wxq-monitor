@@ -21,6 +21,15 @@ const folded = new WeakSet();
 /* 排序视图：只显示纯标题卡片，没有输入框，整张卡按住就能拖，换位最省事 */
 let sortMode = false;
 
+/* 出图套号：勾了「并入」的分组跟上一组同套；套不跨章节，本章第一组永远是套首 */
+function groupSetNos(groups) {
+  let n = 0;
+  return (groups || []).map((g, gi) => {
+    if (!(gi > 0 && g.join)) n++;
+    return n;
+  });
+}
+
 /* 说明类文本框随内容自动撑高，手动换行插在哪一行一眼能看到 */
 function autoGrow(el) {
   if (!el || el.tagName !== 'TEXTAREA') return;
@@ -64,15 +73,27 @@ function buildEditor() {
     /* 折叠时整棵子树不构建，长文档也不会卡 */
     if (secFold) return;
 
+    const setNos = groupSetNos(sec.groups);
+    /* 分套关着的时候不显示套号和「并入」，分组头跟以前一样 */
+    const splitOn = !!state.setSplit;
     (sec.groups || []).forEach((grp, gi) => {
       const gbox = document.createElement('div');
       const grpFold = !sortMode && folded.has(grp);
+      const canJoin = gi > 0;
+      const setNo = setNos[gi];
+      const tagHtml = splitOn
+        ? `<span class="tag" title="出图套号：同号的分组共用一张封面">套${setNo}</span>`
+        : `<span class="tag">分组</span>`;
+      const joinBtn = splitOn
+        ? `<button class="joinBtn${grp.join && canJoin ? ' on' : ''}" data-act="joinGrp" title="${canJoin ? '并入上一套：和上一组共用一张封面，封面写成「篇名 · 上一组+本组」' : '本章第一组，没有上一组可并入'}"${canJoin ? '' : ' disabled'}>并入</button>`
+        : '';
       gbox.className = 'grpBox' + (grpFold ? ' folded' : '') + (sortMode ? ' sortGrp' : '');
       gbox.innerHTML = sortMode
         ? `<div class="grpHead">
-             <span class="tag">分组</span>
+             ${tagHtml}
              <span class="sortName">${esc(grp.name) || '（未命名分组）'}</span>
              <span class="sortCnt">${(grp.items || []).length} 条</span>
+             ${joinBtn}
              <span class="sortOps">
                <button class="mv" data-act="upGrp" title="上移"${gi === 0 ? ' disabled' : ''}>▲</button>
                <button class="mv" data-act="downGrp" title="下移"${gi === (sec.groups || []).length - 1 ? ' disabled' : ''}>▼</button>
@@ -83,8 +104,9 @@ function buildEditor() {
         <div class="grpHead">
           <button class="fold" data-act="foldGrp" title="${grpFold ? '展开本组' : '折叠本组'}">${grpFold ? '▸' : '▾'}</button>
           <span class="grip" title="按住标题栏拖动换位">⠿</span>
-          <span class="tag">分组</span>
+          ${tagHtml}
           <input type="text" class="grpName" placeholder="如：棋手调整" value="${esc(grp.name)}">
+          ${joinBtn}
           <button class="mv" data-act="upGrp" title="上移">▲</button>
           <button class="mv" data-act="downGrp" title="下移">▼</button>
           <button class="iconBtn" data-act="delGrp" title="删除分组">✕</button>
@@ -169,6 +191,20 @@ function buildEditor() {
   });
 
   elSections.querySelectorAll('textarea').forEach(autoGrow);
+
+  /* 顶部显示当前分了几套：只有打开分套才显示，勾「并入」后套数变化一眼能看到 */
+  const sum = document.getElementById('setSum');
+  if (sum) {
+    const count = secs => secs.reduce((a, s) => {
+      const nos = groupSetNos(s.groups);
+      return a + (nos.length ? nos[nos.length - 1] : 0);
+    }, 0);
+    sum.textContent = state.setSplit
+      ? `局内 ${count(state.sections.slice(0, 1))} 套 · 局外 ${count(state.sections.slice(1))} 套`
+      : '';
+  }
+  const splitBtn = document.getElementById('btnSplit');
+  if (splitBtn) splitBtn.classList.toggle('on', !!state.setSplit);
 
   applyPartFilter();
 }
@@ -400,7 +436,11 @@ elSections.addEventListener('click', e => {
     folded.delete(state.sections[si]);
     state.sections[si].groups.push({ name: '', manual: true, items: [{ t: '', d: '', manual: true }] });
   } else if (act === 'delGrp' && si >= 0 && gi >= 0) state.sections[si].groups.splice(gi, 1);
-  else if (act === 'addItem' && si >= 0 && gi >= 0) {
+  else if (act === 'joinGrp' && si >= 0 && gi > 0) {
+    /* 并入 / 拆出上一套：只改标记，套号与封面名由分页端统一算 */
+    const g = state.sections[si].groups[gi];
+    g.join = !g.join;
+  } else if (act === 'addItem' && si >= 0 && gi >= 0) {
     /* 新条目要能看见，把分组展开 */
     folded.delete(state.sections[si].groups[gi]);
     state.sections[si].groups[gi].items.push({ t: '', d: '', manual: true });
@@ -583,6 +623,16 @@ btnSort.addEventListener('click', () => {
   btnSort.textContent = sortMode ? '退出排序' : '排序视图';
   btnSort.classList.toggle('on', sortMode);
   buildEditor();
+});
+
+/* 分套开关：默认关着，局内 / 局外各出一篇；打开后每个分组单独出图 */
+const btnSplit = document.getElementById('btnSplit');
+btnSplit.addEventListener('click', () => {
+  state.setSplit = !state.setSplit;
+  btnSplit.classList.toggle('on', state.setSplit);
+  buildEditor();
+  pageIdx = 0;
+  render();
 });
 
 function setServerUI() {

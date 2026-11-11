@@ -184,17 +184,21 @@ function exportBase() {
   const safe = (state.title || '更新公告').replace(/[\\/:*?"<>|\n]/g, '').slice(0, 20);
   return `${safe}_${state.server}`;
 }
+/* 套名会进文件夹名和文件名：去掉 Windows 不允许的字符，避免某一套写不进去 */
+function safeSetName(name) {
+  return String(name || '').replace(/[\\/:*?"<>|\n]/g, '').trim();
+}
 function exportName(i, total) {
   const pg = pagesCache[i];
-  /* 分套时文件名带套名，两套序号各自从 1 开始 */
-  if (pg && pg.setName) return `${exportBase()}_${pg.setName}_${pg.setIndex + 1}.png`;
+  /* 分套时文件名带套名，每套序号各自从 1 开始 */
+  if (pg && pg.setName) return `${exportBase()}_${safeSetName(pg.setName)}_${pg.setIndex + 1}.png`;
   return `${exportBase()}${total > 1 ? `_${i + 1}` : ''}.png`;
 }
-/* 每张图所在的子文件夹：大文件夹（公告名_服务器）里再按篇分一层。
-   两篇分别导出后都落在同一个大文件夹下，不会散落在所选根目录 */
+/* 每张图所在的子文件夹：大文件夹（公告名_服务器）里再按套分一层。
+   一套一个文件夹，一次导出全部也不会散落在所选根目录 */
 function exportFolderFor(i) {
   const pg = pagesCache[i];
-  return pg && pg.setName ? `${exportBase()}/${pg.setName}` : exportBase();
+  return pg && pg.setName ? `${exportBase()}/${safeSetName(pg.setName)}` : exportBase();
 }
 /* ZIP 内路径 / 选目录时的子目录 */
 function exportPath(i, total) {
@@ -381,13 +385,13 @@ elExportMenu.addEventListener('click', e => {
 async function doExport(choice) {
   const btn = document.getElementById('btnExport');
   const label = btn.textContent;
-  /* 选哪一篇只影响这一次导出：导出完把预览还原成用户原来的那一篇 */
-  const prevPart = state.part, prevSplit = state.split;
-  if (choice === 'all') state.split = false;
-  else { state.split = true; state.part = choice; }
+  /* 导出范围只影响这一次：导出完把预览还原成用户原来那一篇 */
+  const prevScope = renderScope, prevPart = state.part;
+  if (choice === 'all') renderScope = 'all';
+  else if (choice === 'in' || choice === 'out') renderScope = choice;
   const restore = () => {
+    renderScope = prevScope;
     state.part = prevPart;
-    state.split = prevSplit;
     pageIdx = 0;
     applyPartFilter();
     render();
@@ -400,8 +404,8 @@ async function doExport(choice) {
   const ctx = cv.getContext('2d');
   const total = pagesCache.length;
   if (!total) { btn.textContent = label; btn.disabled = false; restore(); return; }
-  /* 分套时这一篇只有封面 = 还没有正文，出一张孤零零的封面没有意义 */
-  if (state.split && total === 1) {
+  /* 只有封面 = 所有分组都还空着，出一张孤零零的封面没有意义 */
+  if (total === 1 && pagesCache[0] && pagesCache[0].cover) {
     clearTimeout(exportResetTimer);
     btn.textContent = '这一篇还没有内容';
     exportResetTimer = setTimeout(() => { btn.textContent = label; }, 1800);
@@ -449,9 +453,9 @@ async function doExport(choice) {
       const packed = [];
       for (const f of files) packed.push({ name: f.name, data: new Uint8Array(await f.blob.arrayBuffer()) });
       const a = document.createElement('a');
-      /* 一次只打当前这一篇，压缩包名带上篇名，两个包解开后落进同一个大文件夹 */
-      const setName = pagesCache[0] && pagesCache[0].setName;
-      a.download = `${exportBase()}${setName ? '_' + setName : ''}.zip`;
+      /* 全部套打进一个包：包名只用公告名，套名体现在包内的子文件夹里 */
+      const setNameList = Array.from(new Set(pagesCache.map(p => p.setName).filter(Boolean)));
+      a.download = `${exportBase()}${setNameList.length === 1 ? '_' + safeSetName(setNameList[0]) : ''}.zip`;
       a.href = URL.createObjectURL(makeZip(packed));
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
@@ -460,7 +464,9 @@ async function doExport(choice) {
     if (dir) {
       try { lexAdded = await saveSpecialLex(dir); } catch (e) { console.warn('特殊库写入失败', e); }
     }
-    btn.textContent = `已导出 ${total} 张` + (lexAdded ? ` · 小抄 +${lexAdded}（记得双击「同步到线上.bat」）` : '');
+    const setTotal = new Set(pagesCache.map(p => p.setName).filter(Boolean)).size;
+    btn.textContent = `已导出 ${total} 张${setTotal > 1 ? ` / ${setTotal} 套` : ''}`
+      + (lexAdded ? ` · 小抄 +${lexAdded}（记得双击「同步到线上.bat」）` : '');
     exportResetTimer = setTimeout(() => { btn.textContent = label; }, lexAdded ? 8000 : 1800);
   } catch (e) {
     console.error(e);

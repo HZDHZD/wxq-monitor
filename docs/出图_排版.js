@@ -902,9 +902,11 @@ function paintCover(ctx, cfg) {
   const g = v => Math.round(m * v);
   const date = String(cfg.date || '').trim() || String(cfg.title || '').replace(TITLE_SUFFIX, '');
   const theme = String(cfg.theme || '').trim();
+  const setNames = String(cfg.setNames || '').trim();
   const sub = String(cfg.sub || (String(cfg.server || '') + SUB_SUFFIX));
-  /* 金色胶囊：分套封面时用「服别 + 更新重点 · 篇名」，避免与外层已含篇名的 sub 重复 */
-  const pill = theme ? (String(cfg.server || '').trim() + SUB_SUFFIX + ' · ' + theme) : sub;
+  /* 金色胶囊：第一行「服别 + 更新重点 · 篇名」，第二行是这一套包含的分组（组A+组B） */
+  const pillHead = theme ? (String(cfg.server || '').trim() + SUB_SUFFIX + ' · ' + theme) : sub;
+  let pillLines = setNames ? [pillHead, setNames] : [pillHead];
   const foot = String(cfg.foot || '').trim();
 
   paintSunsetBg(ctx, W, H, m);
@@ -915,7 +917,7 @@ function paintCover(ctx, cfg) {
   /* --- 布局参数 --- */
   const cardW = g(0.820), padT = g(0.082), padB = g(0.056), padX = g(0.050);
   const dateS = g(0.160), gameS = g(0.054), gapX = g(0.024), gapY = g(0.046);
-  const pillS = g(0.046), pillPad = g(0.038), pillH = Math.round(pillS * 1.62);
+  const pillS = g(0.046), pillPad = g(0.038);
   const kickS = g(0.030), kickPadX = g(0.042), kickH = g(0.062);
   const innerW = cardW - padX * 2;
 
@@ -945,14 +947,22 @@ function paintCover(ctx, cfg) {
   const gInkL = gm.actualBoundingBoxLeft || 0, gInkR = gm.actualBoundingBoxRight || gWid;
   const dInkW = dInkR + dInkL, gInkW = gInkR + gInkL;
 
-  /* 金色胶囊文字放不下时同步收字号 */
+  /* 金色胶囊：两行时按最长那行统一收字号；收到下限仍超宽再逐行折行，保证不出血 */
+  const pillMaxW = innerW - pillPad * 2;
+  const pillWidest = () => Math.max.apply(null, pillLines.map(t => ctx.measureText(t).width));
   setFont(ctx, pillS, 800);
-  let pw = ctx.measureText(pill).width, pSize = pillS;
-  if (pw + pillPad * 2 > innerW) {
-    pSize = Math.round(pillS * Math.max(0.6, (innerW - pillPad * 2) / pw));
+  let pw = pillWidest(), pSize = pillS;
+  if (pw > pillMaxW) {
+    pSize = Math.round(pillS * Math.max(0.6, pillMaxW / pw));
     setFont(ctx, pSize, 800);
-    pw = ctx.measureText(pill).width;
+    pw = pillWidest();
   }
+  if (pw > pillMaxW) {
+    pillLines = pillLines.reduce((a, t) => a.concat(wrapText(ctx, t, pillMaxW)), []);
+    pw = pillWidest();
+  }
+  const pillLineH = Math.round(pSize * 1.62);
+  const pillH = pillLineH * pillLines.length;
 
   /* --- 白卡：高度由内容撑开，整体垂直居中 --- */
   const cardH = padT + lineInkH + gapY + pillH + padB;
@@ -986,14 +996,18 @@ function paintCover(ctx, cfg) {
   const pg = ctx.createLinearGradient(0, py, 0, py + pillH);
   pg.addColorStop(0, '#f6b23c'); pg.addColorStop(1, '#e08a00');
   ctx.fillStyle = pg;
-  rr(ctx, (W - (pw + pillPad * 2)) / 2, py, pw + pillPad * 2, pillH, pillH / 2); ctx.fill();
+  const pillW = pw + pillPad * 2;
+  rr(ctx, (W - pillW) / 2, py, pillW, pillH, Math.min(pillLineH, pillH) / 2); ctx.fill();
   ctx.restore();
   setFont(ctx, pSize, 800);
-  const pm = ctx.measureText(pill);
-  const pAsc = pm.actualBoundingBoxAscent || pSize * 0.78, pDsc = pm.actualBoundingBoxDescent || pSize * 0.22;
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ffffff';
-  ctx.fillText(pill, W / 2, py + (pillH + pAsc - pDsc) / 2);
+  pillLines.forEach((line, k) => {
+    const lm = ctx.measureText(line);
+    const lAsc = lm.actualBoundingBoxAscent || pSize * 0.78;
+    const lDsc = lm.actualBoundingBoxDescent || pSize * 0.22;
+    ctx.fillText(line, W / 2, py + pillLineH * k + (pillLineH + lAsc - lDsc) / 2);
+  });
 
   /* --- 「更 新 公 告」：白底金边金字，骑在白卡上边框正中 --- */
   setFont(ctx, kickS, 800);

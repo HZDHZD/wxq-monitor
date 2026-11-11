@@ -17,6 +17,8 @@ function fitPreview() {
 let fixedScale = 0.66;
 let pageIdx = 0;
 let pagesCache = [];
+/* 预览 / 导出的范围：'' 跟随编辑里的局内 / 局外标签；'in' / 'out' / 'all' 由导出临时指定 */
+let renderScope = '';
 
 /* sections → 有序单元：章节头 / 分组头 / 条目（空条目忽略） */
 function flattenUnits(sections, hideFirstBar) {
@@ -483,6 +485,49 @@ function setSub(base, name) {
   return server ? `${server}更新 · ${name}` : name;
 }
 
+/* =======================  分组 → 出图套  ======================= */
+/* 每个分组默认单独一套（一张封面 + 自己的内容页，页码各从 1 起）；
+   勾了「并入」的分组跟上一组同套，封面名拼成「篇名 · 组A+组B」。套不跨章节 */
+function buildPartSets(secs, partName) {
+  const sets = [];
+  (secs || []).forEach((sec, secIndex) => {
+    let cur = null;
+    (sec.groups || []).forEach(grp => {
+      if (!(grp.join && cur)) { cur = { sec, secIndex, groups: [] }; sets.push(cur); }
+      cur.groups.push(grp);
+    });
+  });
+  const labelOf = st => st.groups.map(g => String(g.name || '').trim()).filter(Boolean).join('+');
+  const arr = sets.map(st => {
+    const label = labelOf(st);
+    return { st, label, name: partName + (label ? ' · ' + label : '') };
+  });
+  /* 局外有多个章节时，不同章节的组可能重名：跨章节重名的补上章节名，导出时才不会互相覆盖。
+     同一章节内重名不补章节名（补了也一样），交给下面的序号兜底 */
+  const owners = Object.create(null);
+  arr.forEach(x => { (owners[x.name] = owners[x.name] || new Set()).add(x.st.secIndex); });
+  arr.forEach(x => {
+    if (owners[x.name].size < 2) return;
+    const secName = String(x.st.sec.name || '').replace(/^\s*[一二三四五六七八九十百\d]+\s*[、.．:：]\s*/, '').trim();
+    x.name = partName + (secName ? ' · ' + secName : '') + (x.label ? ' · ' + x.label : '');
+  });
+  /* 兜底：仍有同名（同章节里两个同名组）就加序号，保证文件/文件夹不互相覆盖 */
+  const seen = Object.create(null);
+  return arr.map(x => {
+    let name = x.name, n = 1;
+    while (seen[name]) name = `${x.name} (${++n})`;
+    seen[name] = 1;
+    return {
+      name,
+      label: x.label,
+      partName,
+      secIndex: x.st.secIndex,
+      sections: [{ name: x.st.sec.name, groups: x.st.groups }],
+      key: partName + '#' + name
+    };
+  });
+}
+
 /* 输入时防抖：先只重绘当前页（几毫秒），整篇重排等停手再做。
    长公告一次全量分页要三四百毫秒，每停顿一下就整篇重排会明显卡；
    当前页重绘用的是上次的分页结果，改动没超出这一页时看起来就是实时的 */
@@ -525,39 +570,55 @@ function render() {
   };
 
   // 固定字号，放不下就自动拆成多张；封面固定作为第 1 张
-  /* 编辑侧分成了局内 / 局外：预览与导出都只出当前标签这一篇，各自带封面、页码从 1 起。
-     关掉「分套」时退回老做法：全部章节当一篇排 */
-  const partName = state.part === 'in' ? '局内平衡篇' : '局外更新篇';
-  const partList = state.part === 'in' ? state.sections.slice(0, 1) : state.sections.slice(1);
+  /* 出图按分组分套：每个分组独立一张封面 + 自己的内容页，页码各从 1 起。
+     renderScope 为空时跟着编辑里的局内 / 局外标签走；导出「全部」时两篇一起排 */
+  const scope = renderScope === 'all' ? 'all'
+    : (renderScope === 'in' || renderScope === 'out' ? renderScope : state.part);
   /* 第一章的标题条什么时候不画：名称含「核心玩法」，或者整篇没有章节名（体验服常见）。
-     这个判断只作用在第一位，局外那套的第一条其实是第二章，照常画 */
+     只对全局第一章生效，局外那套照常画 */
   const firstSec = state.sections[0];
   const firstBarless = !!firstSec && (!String(firstSec.name || '').trim() || isCoreSec(firstSec));
-  if (state.split) {
-    /* 篇内章节序号各自从「一、」重排 */
-    const b = Object.assign({}, base, {
-      sections: partList.map((sec, i) => Object.assign({}, sec, { name: renumberSec(sec.name, i + 1) })),
-      sub: setSub(base, partName),
-      theme: partName,
-      hideFirstBar: state.part === 'in' && firstBarless
-    });
-    /* 这一篇还没有内容时只出封面，不排一张空白内容页 */
-    pagesCache = [{ cover: true, cfg: b }].concat(
-      flattenUnits(b.sections, b.hideFirstBar).length ? fitSetPages(ctx, b, paintSunset, fixedScale, partName) : []);
-    pagesCache.forEach((pg, j) => { pg.setName = partName; pg.setIndex = j; });
+  const sets = [];
+  if (state.setSplit) {
+    /* 打开分套：局内 / 局外各自一次成组，同篇内跨章节的重名组能一起去重 */
+    const pushSets = (secs, partName, baseIdx) => {
+      buildPartSets(secs, partName).forEach(st => sets.push({ st, si: baseIdx + st.secIndex }));
+    };
+    if (scope === 'all' || scope === 'in') pushSets(state.sections.slice(0, 1), '局内平衡篇', 0);
+    if (scope === 'all' || scope === 'out') pushSets(state.sections.slice(1), '局外更新篇', 1);
   } else {
-    /* 不分套：第一章标题已隐藏，后面的章节跟着从「一、」重排，
-       避免正文里顶着「二、系统内容更新」开场；第一章不是核心章节时仍从「一、」起 */
-    const firstIsCore = isCoreSec(base.sections[0]);
+    /* 没开分套：局内 / 局外各整篇一套，和以前的出图方式一致 */
+    const pushWhole = (secs, partName, baseIdx) => {
+      sets.push({ st: { name: partName, label: '', partName, sections: secs }, si: baseIdx });
+    };
+    if (scope === 'all' || scope === 'in') pushWhole(state.sections.slice(0, 1), '局内平衡篇', 0);
+    if (scope === 'all' || scope === 'out') pushWhole(state.sections.slice(1), '局外更新篇', 1);
+  }
+
+  pagesCache = [];
+  sets.forEach(({ st, si }) => {
+    /* 章节序号从「一、」重排；整篇时后面的章节依次往下排 */
     const b = Object.assign({}, base, {
-      sections: base.sections.map((sec, i) => {
-        /* 第一章本身不参与重排（它的标题不画，别重排成「零、」） */
-        if (firstIsCore && i === 0) return sec;
-        return Object.assign({}, sec, { name: renumberSec(sec.name, firstIsCore ? i : i + 1) });
-      }),
-      hideFirstBar: firstBarless
+      sections: st.sections.map((sec, i) => Object.assign({}, sec, { name: renumberSec(sec.name, i + 1) })),
+      sub: setSub(base, st.partName),
+      theme: st.partName,
+      setNames: st.label,
+      hideFirstBar: si === 0 && firstBarless
     });
-    pagesCache = [{ cover: true, cfg: b }].concat(fitSetPages(ctx, b, paintSunset, fixedScale, 'all'));
+    /* 空分组不出封面，也不占页码 */
+    if (!flattenUnits(b.sections, b.hideFirstBar).length) return;
+    const pgs = [{ cover: true, cfg: b }].concat(fitSetPages(ctx, b, paintSunset, fixedScale, st.key));
+    pgs.forEach((pg, j) => { pg.setName = st.name; pg.setIndex = j; });
+    pagesCache.push(...pgs);
+  });
+  /* 所有分组都还空着：留一张封面，预览不空白；导出时会提示这一篇还没有内容 */
+  if (!pagesCache.length) {
+    const partName = scope === 'out' ? '局外更新篇' : '局内平衡篇';
+    const b = Object.assign({}, base, {
+      sections: [], sub: setSub(base, partName), theme: partName, setNames: '',
+      hideFirstBar: true
+    });
+    pagesCache = [{ cover: true, cfg: b, setName: partName, setIndex: 0 }];
   }
   if (pageIdx > pagesCache.length - 1) pageIdx = pagesCache.length - 1;
   if (pageIdx < 0) pageIdx = 0;
@@ -576,12 +637,7 @@ function render() {
     el.style.display = parseFloat(v) > 0 ? 'flex' : 'none';
   });
 
-  /* 显示实际生效字号（不是输入框里的基准字号） */
-  const pctOf = p => Math.round((p.scale || fixedScale) * 100);
-  const curPg = pagesCache.find(p => !p.cover && p.scale);
-  const scaleText = curPg ? `${pctOf(curPg)}%` : `${Math.round(fixedScale * 100)}%`;
-  document.getElementById('stageInfo').textContent =
-    `${size.name} · ${W}×${H} · ${state.split ? partName + ' · ' : ''}实际字号 ${scaleText} · 共 ${pagesCache.length} 张（含封面）`;
+  updateStageInfo();
 
   syncPager();
   fitPreview();
@@ -596,12 +652,25 @@ function syncPager() {
   document.getElementById('pgNext').disabled = pageIdx >= pagesCache.length - 1;
 }
 
+/* 预览顶部信息：带当前页所属的套名，翻页时也要跟着刷新 */
+function updateStageInfo() {
+  const size = SIZE;
+  const pctOf = p => Math.round((p.scale || fixedScale) * 100);
+  const curSet = pagesCache[pageIdx] && pagesCache[pageIdx].setName;
+  /* 字号按当前这一套算：每套各自找过字号，跨套时不能拿第一套的来显示 */
+  const curPg = pagesCache.find(p => !p.cover && p.scale && (!curSet || p.setName === curSet));
+  const scaleText = curPg ? `${pctOf(curPg)}%` : `${Math.round(fixedScale * 100)}%`;
+  document.getElementById('stageInfo').textContent =
+    `${size.name} · ${size.w}×${size.h} · ${curSet ? curSet + ' · ' : ''}实际字号 ${scaleText} · 共 ${pagesCache.length} 张（含封面）`;
+}
+
 /* 翻页只重画当前页：不重新分页、不重新找字号 */
 function showPage(i) {
   if (!pagesCache.length) return;
   pageIdx = Math.max(0, Math.min(i, pagesCache.length - 1));
   paintPage(cv.getContext('2d'), pageIdx);
   syncPager();
+  updateStageInfo();
 }
 
 window.addEventListener('resize', fitPreview);
