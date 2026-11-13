@@ -57,6 +57,8 @@ DRAW_URL = "https://hzdhzd.github.io/wxq-monitor/auto.html?newsid={newsid}"
 # 新公告提醒走另一条逻辑，发布时记下正文指纹做基线，之后的第一次改动立即提醒。
 DETAIL_API_URL = "https://apps.game.qq.com/wmp/v3.1/public/searchNews.php"
 WATCH_DAYS = 2
+# 改动提醒里每处改动上下各带几行未改动的原文（用于定位是哪个英雄/哪一项）
+DIFF_CONTEXT = 3
 
 # 标题过滤关键词（与本地版一致）
 TITLE_KEYWORDS = ("更新", "开服", "关服", "体验服", "正式服")
@@ -177,18 +179,41 @@ def write_snapshot(newsid: str, text: str):
     snapshot_path(newsid).write_text(text, encoding="utf-8")
 
 
-def diff_lines(old: str, new: str) -> list:
-    """行级差异，「- 旧行」/「+ 新行」，用于提醒里直接看出改了哪里。"""
+def diff_hunks(old: str, new: str) -> list:
+    """行级差异，带上下一段未改动的原文做定位。
+    返回「处」的列表，每处是 [类型, 文本] 的列表，类型为 ctx（未改动）/ old（改动前）/ new（改动后）。"""
     if not old:
         return []
-    out = []
-    for raw in difflib.unified_diff(old.split("\n"), new.split("\n"), lineterm="", n=0):
-        if raw.startswith(("+++", "---", "@@")):
+    hunks, cur = [], []
+    for raw in difflib.unified_diff(old.split("\n"), new.split("\n"),
+                                    lineterm="", n=DIFF_CONTEXT):
+        if raw.startswith(("+++", "---")):
+            continue
+        if raw.startswith("@@"):
+            if cur:
+                hunks.append(cur)
+            cur = []
             continue
         sign, body = raw[:1], raw[1:].strip()
-        if sign not in "+-" or not body:
-            continue
-        out.append(f"{sign} {body}")
+        if sign == " ":
+            cur.append(["ctx", body])
+        elif sign == "-":
+            cur.append(["old", body])
+        elif sign == "+":
+            cur.append(["new", body])
+    if cur:
+        hunks.append(cur)
+    return hunks
+
+
+def normalize_hunks(raw_list) -> list:
+    """兼容旧账本里存成「- 文本」/「+ 文本」字符串的改动记录。"""
+    out = []
+    for e in raw_list or []:
+        if isinstance(e, list):
+            out.append(e)
+        elif isinstance(e, str) and e[:1] in ("-", "+") and e[1:].strip():
+            out.append([["old" if e[0] == "-" else "new", e[1:].strip()]])
     return out
 
 
@@ -272,16 +297,17 @@ def collect_body_changes(announcements: list):
             else:
                 st["count"] = int(st.get("count") or 0) + 1
                 st["hash"] = digest
-                lines = diff_lines(old_text, text)
-                if lines:
-                    # 冷却内的多次改动按顺序累加，提醒后清空
-                    st["diff"] = (st.get("diff") or []) + lines
+                hunks = diff_hunks(old_text, text)
+                if hunks:
+                    # 相邻两轮之间的多次改动按顺序累加，提醒后清空
+                    st["diff"] = normalize_hunks(st.get("diff")) + hunks
                 log(f"✎ 正文有改动（第{st['count']}次）：{it['title']}  {it['time']}")
         write_snapshot(it["id"], text)
 
         # 邮件不限量：有未提醒的改动就本轮发，不做冷却
         if st["hash"] != st.get("notified"):
-            due.append({"item": it, "count": int(st["count"]), "diff": st.get("diff") or []})
+            due.append({"item": it, "count": int(st["count"]),
+                        "diff": normalize_hunks(st.get("diff"))})
             st["notified"] = st["hash"]
             st.pop("diff", None)
         keep[it["id"]] = st
@@ -328,6 +354,34 @@ def send_email(subject: str, html: str):
         server.quit()
 
 
+def render_hunks_html(hunks: list) -> str:
+    """把「处」列表渲染成带颜色的 HTML：旧=红、新=绿（加粗）、上下文=灰。"""
+    blocks = []
+    for idx, hunk in enumerate(hunks, 1):
+        rows = []
+        for typ, text in hunk:
+            text = html.escape(text)
+            if typ == "old":
+                rows.append(
+                    f'<div style="font-size:13px;line-height:1.8;color:#b42318;'
+                    f'background:#fef3f2;padding:2px 6px;border-radius:4px">'
+                    f'<b>旧</b> {text}</div>')
+            elif typ == "new":
+                rows.append(
+                    f'<div style="font-size:13px;line-height:1.8;color:#067647;'
+                    f'background:#ecfdf3;padding:2px 6px;border-radius:4px;'
+                    f'font-weight:bold"><b style="font-weight:normal">新</b> {text}</div>')
+            else:
+                rows.append(
+                    f'<div style="font-size:13px;line-height:1.8;color:#888">'
+                    f'· {text}</div>')
+        blocks.append(
+            f'<div style="margin-bottom:12px">'
+            f'<div style="font-size:12px;color:#b45309;font-weight:bold;'
+            f'margin-bottom:2px">第{idx}处</div>' + "".join(rows) + '</div>')
+    return "".join(blocks)
+
+
 def build_email_html(new_items: list, changes: list) -> str:
     rows = []
     for it in new_items:
@@ -352,22 +406,12 @@ def build_email_html(new_items: list, changes: list) -> str:
         it = ch["item"]
         diff_html = ""
         if ch.get("diff"):
-            diff_rows = []
-            for d in ch["diff"]:
-                if d.startswith("+"):
-                    style = "color:#0b7a3b;"
-                elif d.startswith("-"):
-                    style = "color:#999;text-decoration:line-through;"
-                else:
-                    style = "color:#888;"
-                diff_rows.append(f'<div style="font-size:12px;line-height:1.7;{style}">'
-                                 f'{html.escape(d)}</div>')
             diff_html = (
                 f'<div style="margin-top:10px;padding:10px 12px;background:#fff;'
                 f'border:1px solid #eee;border-radius:6px">'
                 f'<div style="font-size:12px;color:#888;margin-bottom:6px">'
-                f'本次改动（- 为原文，+ 为改后）：</div>'
-                + "".join(diff_rows) + '</div>')
+                f'共 {len(ch["diff"])} 处改动（· 为未改动的原文，旧 为改动前，新 为改动后）：</div>'
+                + render_hunks_html(ch["diff"]) + '</div>')
         change_rows.append(
             f'<div style="border:1px solid #f0d38a;border-left:4px solid #f59e0b;'
             f'border-radius:8px;padding:12px 16px;margin:10px 0;background:#fffaf0">'
