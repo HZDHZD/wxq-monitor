@@ -354,27 +354,55 @@ def send_email(subject: str, html: str):
         server.quit()
 
 
+def label_hunks(hunk: list) -> list:
+    """给一处改动里的每一行加标签：
+    未改动→·；成对的删+增→旧/新；孤立的删除→删；孤立的新增→增。"""
+    rows, i = [], 0
+    while i < len(hunk):
+        typ, text = hunk[i]
+        if typ == "ctx":
+            rows.append(("·", text))
+            i += 1
+            continue
+        j = i
+        while j < len(hunk) and hunk[j][0] == typ:
+            j += 1
+        if typ == "old":
+            k = j
+            while k < len(hunk) and hunk[k][0] == "new":
+                k += 1
+            label = "旧" if k > j else "删"   # 后面紧跟一段新增 → 属于修改；否则是整段删除
+        else:
+            label = "新" if i > 0 and hunk[i - 1][0] == "old" else "增"
+        rows.extend((label, text) for _, text in hunk[i:j])
+        i = j
+    return rows
+
+
 def render_hunks_html(hunks: list) -> str:
-    """把「处」列表渲染成带颜色的 HTML：旧=红、新=绿（加粗）、上下文=灰。"""
+    """把「处」列表渲染成带颜色的 HTML：删除/改动前=红、新增/改动后=绿、未改动=灰。"""
+    styles = {
+        "旧": ("#b42318", "#fef3f2", True),
+        "删": ("#b42318", "#fef3f2", False),
+        "新": ("#067647", "#ecfdf3", True),
+        "增": ("#067647", "#ecfdf3", True),
+    }
     blocks = []
     for idx, hunk in enumerate(hunks, 1):
         rows = []
-        for typ, text in hunk:
+        for label, text in label_hunks(hunk):
             text = html.escape(text)
-            if typ == "old":
-                rows.append(
-                    f'<div style="font-size:13px;line-height:1.8;color:#b42318;'
-                    f'background:#fef3f2;padding:2px 6px;border-radius:4px">'
-                    f'<b>旧</b> {text}</div>')
-            elif typ == "new":
-                rows.append(
-                    f'<div style="font-size:13px;line-height:1.8;color:#067647;'
-                    f'background:#ecfdf3;padding:2px 6px;border-radius:4px;'
-                    f'font-weight:bold"><b style="font-weight:normal">新</b> {text}</div>')
-            else:
+            if label == "·":
                 rows.append(
                     f'<div style="font-size:13px;line-height:1.8;color:#888">'
                     f'· {text}</div>')
+                continue
+            color, bg, bold = styles[label]
+            weight = "font-weight:bold;" if bold else ""
+            rows.append(
+                f'<div style="font-size:13px;line-height:1.8;color:{color};'
+                f'background:{bg};padding:2px 6px;border-radius:4px;{weight}">'
+                f'<b style="font-weight:normal">{label}</b> {text}</div>')
         blocks.append(
             f'<div style="margin-bottom:12px">'
             f'<div style="font-size:12px;color:#b45309;font-weight:bold;'
@@ -410,7 +438,7 @@ def build_email_html(new_items: list, changes: list) -> str:
                 f'<div style="margin-top:10px;padding:10px 12px;background:#fff;'
                 f'border:1px solid #eee;border-radius:6px">'
                 f'<div style="font-size:12px;color:#888;margin-bottom:6px">'
-                f'共 {len(ch["diff"])} 处改动（· 为未改动的原文，旧 为改动前，新 为改动后）：</div>'
+                f'共 {len(ch["diff"])} 处改动（· 未改动，旧/新 改动前后，删/增 整段删除或新增）：</div>'
                 + render_hunks_html(ch["diff"]) + '</div>')
         change_rows.append(
             f'<div style="border:1px solid #f0d38a;border-left:4px solid #f59e0b;'
