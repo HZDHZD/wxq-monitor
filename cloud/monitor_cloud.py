@@ -268,6 +268,12 @@ def collect_body_changes(announcements: list):
             watched.append(it)
 
     state = load_body_state()
+    # 抓回来的公告一条都没有、而账本里还有记录 → 判定为接口异常，
+    # 保留原账本不覆盖，否则账本被清空后下一轮会把改动当成「首次见到」静默吞掉。
+    if not watched and state:
+        log("⚠ 本轮抓到的公告为 0 条，疑似接口异常，保留原账本不覆盖。")
+        return [], state
+
     keep, due = {}, []
     for it in watched:
         try:
@@ -281,10 +287,23 @@ def collect_body_changes(announcements: list):
 
         st = state.get(it["id"])
         if not st or not st.get("hash"):
-            # 首次见到这篇（新公告首发，或监控刚上线）：静默记基线，不提醒
-            keep[it["id"]] = {"title": it["title"], "hash": digest, "notified": digest, "count": 0}
-            write_snapshot(it["id"], text)
-            continue
+            # 账本里没有这条：优先拿本地旧快照兜底比对，避免账本丢失后改动被静默吞掉
+            old_text = read_snapshot(it["id"])
+            if old_text and old_text != text:
+                st = {
+                    "title": it["title"],
+                    "hash": digest,
+                    "notified": body_hash(old_text),
+                    "count": 1,
+                    "diff": diff_hunks(old_text, text),
+                }
+                log(f"✎ 账本缺失但找到旧快照，按改动处理：{it['title']}  {it['time']}")
+            else:
+                # 首次见到这篇（新公告首发，或监控刚上线）：静默记基线，不提醒
+                keep[it["id"]] = {"title": it["title"], "hash": digest,
+                                  "notified": digest, "count": 0}
+                write_snapshot(it["id"], text)
+                continue
 
         st["title"] = it["title"]
         st.pop("last_push", None)
