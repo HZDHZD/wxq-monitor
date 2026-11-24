@@ -174,9 +174,33 @@ def read_snapshot(newsid: str) -> str:
         return ""
 
 
+SNAP_INDEX_PATH = SNAP_DIR / "index.json"
+
+
+def load_snap_index() -> dict:
+    """快照写入时间索引 {newsid: ISO 时间}。
+
+    不能靠文件 mtime：GitHub Actions 每次 checkout 都会把 mtime 刷成当下，
+    用它判断“超 30 天”永远不成立，清理就成了摆设。
+    """
+    try:
+        raw = json.loads(SNAP_INDEX_PATH.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_snap_index(index: dict):
+    SNAP_INDEX_PATH.write_text(json.dumps(index, ensure_ascii=False, indent=2, sort_keys=True),
+                               encoding="utf-8")
+
+
 def write_snapshot(newsid: str, text: str):
     SNAP_DIR.mkdir(parents=True, exist_ok=True)
     snapshot_path(newsid).write_text(text, encoding="utf-8")
+    index = load_snap_index()
+    index[newsid] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    save_snap_index(index)
 
 
 def diff_hunks(old: str, new: str) -> list:
@@ -248,10 +272,48 @@ def save_body_state(state: dict) -> bool:
     return True
 
 
+def prune_snapshots(state: dict):
+    """删掉「账本里已经没有 + 超过 30 天没更新」的正文快照，避免无限增长。
+
+    两个条件必须同时满足：刚过 2 天监控期的公告仍保留备份，方便回头改动时兜底比对。
+    时间取自 index.json（文件 mtime 在 CI 上不可靠）；索引里没有记录的老文件先补上时间、不删。
+    """
+    if not SNAP_DIR.exists():
+        return
+    index = load_snap_index()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    changed = False
+    for path in SNAP_DIR.glob("*.txt"):
+        if path.stem in state:
+            continue
+        written = index.get(path.stem)
+        try:
+            ts = datetime.fromisoformat(written) if written else None
+        except ValueError:
+            ts = None
+        if ts is None:
+            # 老文件没有写入记录：从现在开始计时，否则这些文件永远清不掉
+            index[path.stem] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            changed = True
+            continue
+        if ts < cutoff:
+            try:
+                path.unlink()
+                index.pop(path.stem, None)
+                changed = True
+                log(f"清理过期正文快照：{path.name}")
+            except OSError as ex:
+                log(f"清理快照失败 {path.name}：{ex}")
+    if changed:
+        save_snap_index(index)
+
+
 def collect_body_changes(announcements: list):
     """抓最近 2 天公告的正文，与账本里的指纹比对。
 
-    返回 (到期的改动列表, 新的正文账本)。
+    返回 (到期的改动列表, 新的正文账本, 待落盘的快照)。
+    待落盘的快照是「正文有改动」的那几篇 {newsid: 正文}，必须等邮件发送成功后再写，
+    否则发送失败时快照已经更新，下一轮 diff 为空，改动内容就再也提醒不出来了。
     账本每篇：{title, hash, notified, count}
       hash      = 最近一次抓到的正文指纹
       notified  = 最近一次提醒时的正文指纹（hash != notified 表示有未提醒的改动）
@@ -272,12 +334,16 @@ def collect_body_changes(announcements: list):
     # 保留原账本不覆盖，否则账本被清空后下一轮会把改动当成「首次见到」静默吞掉。
     if not watched and state:
         log("⚠ 本轮抓到的公告为 0 条，疑似接口异常，保留原账本不覆盖。")
-        return [], state
+        return [], state, {}
 
-    keep, due = {}, []
+    keep, due, pending = {}, [], {}
     for it in watched:
         try:
             text = normalize_body(fetch_body(it["id"]))
+            # 正文只剩图片/空段落时归一化结果为空，这不是真实改动：
+            # 若当成改动会把整篇误报成「整段删除」，还会用空文本覆盖旧快照
+            if not text.strip():
+                raise ValueError("正文归一化后为空")
             digest = body_hash(text)
         except Exception as ex:
             log(f"正文抓取失败 {it['id']}：{ex}（跳过，下次再试）")
@@ -294,7 +360,7 @@ def collect_body_changes(announcements: list):
                     "title": it["title"],
                     "hash": digest,
                     "notified": body_hash(old_text),
-                    "count": 1,
+                    "count": 0,
                     "diff": diff_hunks(old_text, text),
                 }
                 log(f"✎ 账本缺失但找到旧快照，按改动处理：{it['title']}  {it['time']}")
@@ -313,25 +379,41 @@ def collect_body_changes(announcements: list):
                 # 快照机制刚上线/缺快照：这一轮只补基线，不当作改动提醒
                 st["hash"] = digest
                 st["notified"] = digest
+                log(f"⚠ 缺少上一版正文快照，本轮只补基线不提醒：{it['title']}")
             else:
-                st["count"] = int(st.get("count") or 0) + 1
                 st["hash"] = digest
                 hunks = diff_hunks(old_text, text)
-                if hunks:
-                    # 相邻两轮之间的多次改动按顺序累加，提醒后清空
-                    st["diff"] = normalize_hunks(st.get("diff")) + hunks
-                log(f"✎ 正文有改动（第{st['count']}次）：{it['title']}  {it['time']}")
-        write_snapshot(it["id"], text)
+                # 每轮都按「上次推送时的底稿 → 当前正文」重算并覆盖，
+                # 不累积历史轮次：改回原样时差异自然为空，不会留下自相矛盾的记录
+                st["diff"] = hunks
+                # 记下这处改动第一次被发现的时刻（北京时间），推送里显示，便于判断新旧
+                if not st.get("changed_at"):
+                    st["changed_at"] = datetime.now(
+                        timezone(timedelta(hours=8))).strftime("%m-%d %H:%M")
+                # 有改动时先不写快照：等邮件真的发出去再写，否则发送失败后
+                # 下一轮拿新快照和新正文比，diff 为空，改动内容会永久丢失
+                pending[it["id"]] = text
+                log(f"✎ 正文有改动：{it['title']}  {it['time']}")
+        if it["id"] not in pending:
+            write_snapshot(it["id"], text)
 
         # 邮件不限量：有未提醒的改动就本轮发，不做冷却
         if st["hash"] != st.get("notified"):
-            due.append({"item": it, "count": int(st["count"]),
-                        "diff": normalize_hunks(st.get("diff"))})
+            diff = normalize_hunks(st.get("diff"))
             st["notified"] = st["hash"]
             st.pop("diff", None)
+            if diff:
+                # 「第N次」= 真正推送成功的次数，避免冷却合并/改回原样造成跳号
+                st["count"] = int(st.get("count") or 0) + 1
+                due.append({"item": it, "count": int(st["count"]), "diff": diff,
+                            "changed_at": st.pop("changed_at", "")})
+            else:
+                # 改回原样：和上次推送时的正文一模一样，没有可看的内容，不提醒
+                st.pop("changed_at", None)
+                log(f"↩ 正文已改回原样，不提醒：{it['title']}")
         keep[it["id"]] = st
 
-    return due, keep
+    return due, keep, pending
 
 
 def load_seen() -> dict:
@@ -466,7 +548,8 @@ def build_email_html(new_items: list, changes: list) -> str:
             f'text-decoration:none;font-weight:bold">'
             f'【公告有改动·第{ch["count"]}次】{it["title"]}</a>'
             f'<div style="color:#999;font-size:12px;margin-top:4px">'
-            f'公告 · 发布时间：{it["time"]}</div>'
+            f'公告 · 发布时间：{it["time"]}'
+            f'{(" · 检测时间：" + ch["changed_at"]) if ch.get("changed_at") else ""}</div>'
             f'{diff_html}'
             f'<div style="margin-top:8px">'
             f'<a href="{it["draw"]}" style="display:inline-block;padding:6px 14px;'
@@ -576,11 +659,12 @@ def main():
         log(f"栏目分类首次接入，已静默记录 {added} 条历史内容，不提醒。")
 
     new_items = [it for it in items if it["id"] not in seen]
-    changes, body_state = collect_body_changes(announcements)
+    changes, body_state, pending_snaps = collect_body_changes(announcements)
 
     if not new_items and not changes:
         if save_body_state(body_state):
             log("正文指纹账本已更新。")
+        prune_snapshots(body_state)
         log("没有新内容，也没有公告改动。")
         ping_ok()
         return
@@ -606,8 +690,14 @@ def main():
             seen[it["id"]] = it["title"]
         save_seen(seen)
         log("新内容已入账，workflow 将自动提交回仓库。")
+    # 邮件已确认发出，这时才把有改动的正文写成新快照
+    for newsid, text in pending_snaps.items():
+        write_snapshot(newsid, text)
+    if pending_snaps:
+        log(f"已更新 {len(pending_snaps)} 篇公告的正文快照。")
     if save_body_state(body_state):
         log("正文指纹账本已更新，workflow 将自动提交回仓库。")
+    prune_snapshots(body_state)
     ping_ok()
 
 
