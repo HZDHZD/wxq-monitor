@@ -75,7 +75,7 @@ function buildEditor() {
 
     const setNos = groupSetNos(sec.groups);
     /* 分套关着的时候不显示套号和「并入」，分组头跟以前一样 */
-    const splitOn = !!state.setSplit;
+    const splitOn = !!state.setSplit && !state.mergeParts;
     (sec.groups || []).forEach((grp, gi) => {
       const gbox = document.createElement('div');
       const grpFold = !sortMode && folded.has(grp);
@@ -198,17 +198,25 @@ function buildEditor() {
 
   /* 顶部显示当前分了几套：只有打开分套才显示，勾「并入」后套数变化一眼能看到 */
   const sum = document.getElementById('setSum');
+  const splitOn = !!state.setSplit && !state.mergeParts;
   if (sum) {
     const count = secs => secs.reduce((a, s) => {
       const nos = groupSetNos(s.groups);
       return a + (nos.length ? nos[nos.length - 1] : 0);
     }, 0);
-    sum.textContent = state.setSplit
+    sum.textContent = splitOn
       ? `局内 ${count(state.sections.slice(0, 1))} 套 · 局外 ${count(state.sections.slice(1))} 套`
       : '';
   }
   const splitBtn = document.getElementById('btnSplit');
-  if (splitBtn) splitBtn.classList.toggle('on', !!state.setSplit);
+  if (splitBtn) splitBtn.classList.toggle('on', splitOn);
+  const mergeBtn = document.getElementById('btnMerge');
+  if (mergeBtn) mergeBtn.classList.toggle('on', !!state.mergeParts);
+  /* 导出菜单的说明跟着合并开关走：合并后「全部」是一册连续内容 */
+  const pmHead = document.querySelector('#exportMenu .pmHead');
+  if (pmHead) pmHead.textContent = state.mergeParts
+    ? '导出范围（「全部」合并成一册）'
+    : '导出范围（每个分组独立成篇）';
 
   applyPartFilter();
 }
@@ -703,7 +711,19 @@ btnSort.addEventListener('click', () => {
 const btnSplit = document.getElementById('btnSplit');
 btnSplit.addEventListener('click', () => {
   state.setSplit = !state.setSplit;
-  btnSplit.classList.toggle('on', state.setSplit);
+  /* 和合并互斥：打开分套就关掉合并 */
+  if (state.setSplit) state.mergeParts = false;
+  buildEditor();
+  pageIdx = 0;
+  render();
+});
+
+/* 合并开关：局内章节之后直接接局外章节，一张封面、页码连续；和分套互斥 */
+const btnMerge = document.getElementById('btnMerge');
+btnMerge.addEventListener('click', () => {
+  state.mergeParts = !state.mergeParts;
+  /* 合并成一册就不再按分组分套 */
+  if (state.mergeParts) state.setSplit = false;
   buildEditor();
   pageIdx = 0;
   render();

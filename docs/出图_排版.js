@@ -174,7 +174,17 @@ function paintFlow(ctx, cfg, scale, oy, T) {
   };
   if (!noTitle) {
     tS = fitBarText(title, tS, T.tWeight, titleW, Math.round(m * T.tS * 0.6));
-    if (sub) subS = fitBarText(sub, subS, T.subWeight, titleW - pillPadX * 2, Math.round(m * T.subS * 0.6));
+    /* 副标题（「体验服更新 · 局内平衡篇」）只占一行：缩到 0.6 还放不下就继续收字号，
+       宁可字小也不拆成两行胶囊；标题可以换行，副标题不行 */
+    const subMaxW = titleW - pillPadX * 2;
+    if (sub) {
+      subS = fitBarText(sub, subS, T.subWeight, subMaxW, Math.round(m * T.subS * 0.6));
+      setFont(ctx, subS, T.subWeight);
+      while (subS > m * T.subS * 0.4 && ctx.measureText(sub).width > subMaxW) {
+        subS -= Math.max(1, Math.round(m * 0.0015));
+        setFont(ctx, subS, T.subWeight);
+      }
+    }
   }
   const tLh     = tS * T.tLhF;
   const subLh   = subS * T.subLhF;
@@ -183,7 +193,8 @@ function paintFlow(ctx, cfg, scale, oy, T) {
   setFont(ctx, tS, T.tWeight);
   const tLines = wrapText(ctx, title, titleW);
   setFont(ctx, subS, T.subWeight);
-  const sLines = sub ? wrapText(ctx, sub, titleW - pillPadX * 2) : [];
+  /* 收过字号之后仍然超宽（副标题极长）才折行，正常情况下永远是一行 */
+  const sLines = sub ? (ctx.measureText(sub).width <= titleW - pillPadX * 2 ? [sub] : wrapText(ctx, sub, titleW - pillPadX * 2)) : [];
   const banTextH = tLines.length * tLh + (sLines.length ? m * 0.016 * bs + sLines.length * subLh : 0);
   const banH = noTitle ? 0 : banTextH + banPad * 2;
   const gapBanBody = noTitle ? 0 : m * 0.042 * bs;

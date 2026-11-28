@@ -1,5 +1,19 @@
 /* 本文件由 公告提炼.html 拆出，按函数名定位（行号会漂移） */
-function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verbatim, state) {
+/* 「换帅 购买费用提升至4阶能量，品阶上调为5阶。」：效果牌公告常把牌名和说明
+   写在同一行、中间只隔一个空格。当前分组是效果牌调整，或前半截就是效果牌名单里的
+   名字时，按第一个空格拆成「牌名 / 说明」，否则两张牌会挤成一张无标题卡 */
+const EFFECT_NAME_RE = /^[\u4e00-\u9fa5·・]{2,8}$/;
+function splitEffectLine(text, grpName) {
+  const m = String(text || '').trim().match(/^([\u4e00-\u9fa5·・]{2,8})[\s\u3000]+(\S{4,})$/);
+  if (!m) return null;
+  const name = m[1];
+  if (!EFFECT_NAME_RE.test(name) || NOT_NAME_RE.test(name)
+    || ACTION_HEAD_RE.test(name) || TIER_LABEL_RE.test(name)) return null;
+  const lk = lexLookup(name);
+  if (!/效果牌/.test(grpName || '') && !(lk && lk.kind === 'effect')) return null;
+  return { name, rest: m[2] };
+}
+function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verbatim, state, scopeState) {
   /* 「问题修复」原文每一行就是一条，逐条拆开，不能拼成一段 */
   if (/问题修复/.test(grpName || '')) {
     const out = [];
@@ -57,15 +71,19 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
       }
     }
     /* 三级标签独占一条，后续条目单独解析 */
-    if (isSubLabel(lines, i)) {
-      const t = lines[i].text.trim();
+    const headTitle = numHeadTitle(lines[i].text);
+    if (isSubLabel(lines, i) || headTitle) {
+      let t = headTitle || lines[i].text.trim();
+      /* 同一组里多个阵营/牌类都有「新增 / 调整」：带上父级名字，避免重名小节 */
+      if (headTitle && scopeState && scopeState.scope) t = scopeState.scope + ' · ' + headTitle;
       /* 与分组同名的小标题不重复渲染 */
       if (t !== clean(grpName || '')) items.push({ t, d: '', sub: true });
+      if (scopeState && /(?:阵营|效果牌)$/.test(t)) scopeState.scope = t;
       forcedStart = true;
       i++;
       continue;
     }
-    if (!forcedStart && !startAt(i)) {
+    if (!forcedStart && !startAt(i) && !splitEffectLine(lines[i].text, grpName)) {
       if (!items.length) {
         items.push({ t: '', d: '', _lines: [lines[i].text], _srcLines: [lines[i].raw || lines[i].text] });
       } else {
@@ -88,7 +106,21 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
     forcedStart = false;
     const first = lines[i];
     let name = '', rawName = '', fromColon = false, presetRest = null, nameNew = false;
-    if (first.bold) {
+    const effLine = splitEffectLine(first.text, grpName);
+    const cardTitle = cardTitleText(first.text);
+    if (cardTitle) {
+      /* S2 的整行标题：【1阶】妲己 保留阶数；烽火令【1阶】【2能量】【通用】
+         只把牌名当标题，阶数/能量/阵营放正文第一行；旧名→新名 整行保留 */
+      const tagM = cardTitle.match(/^([\u4e00-\u9fa5·]{2,10})((?:【[^】]{1,8}】)+)$/);
+      if (tagM) {
+        name = tagM[1];
+        rawName = cardTitle;
+        presetRest = tagM[2];
+      } else {
+        name = cardTitle;
+        rawName = name;
+      }
+    } else if (first.bold) {
       name = first.bold;
       rawName = name;
     } else if (newScope && NEW_ITEM_LINE_RE.test(first.text)) {
@@ -115,6 +147,10 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
     } else if (/[：:]\s*$/.test(first.text)) {
       const t0 = first.text.replace(/[：:]\s*$/, '').trim();
       if (t0.length <= 12 && !/[。；]/.test(t0)) { name = t0; rawName = t0; fromColon = true; }
+    } else if (effLine) {
+      name = effLine.name;
+      rawName = name;
+      presetRest = effLine.rest;
     } else if (!flat && /（新增）$/.test(first.text.trim())) {
       /* 「处决标记（新增）」：原文用「（新增）」表示这是新条目，名字在括号前。
          名单里查得到就用名单写法（香香 · 处决标记），查不到也照名字出标题
@@ -184,8 +220,10 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
     else if (rest) body.push(rest);
     for (; j < lines.length; j++) {
       /* 「技能 / 初始法力值 / 10级」这类档位标签属于上一条：上一句已经收尾也
-         不另起一张只有标签名的卡，交给正文按「标签：内容」排 */
-      if (startAt(j) && !(!lines[j].bold && TIER_LABEL_RE.test(lines[j].text.trim()))) break;
+         不另起一张只有标签名的卡，交给正文按「标签：内容」排。
+         效果牌组里另一张「牌名 说明」行也要另起一张，不能并进上一条正文 */
+      if ((startAt(j) || !!splitEffectLine(lines[j].text, grpName))
+        && !(!lines[j].bold && TIER_LABEL_RE.test(lines[j].text.trim()))) break;
       body.push(lines[j].text);
     }
 
@@ -203,17 +241,25 @@ function makeItems(lines, grpName, allowSkill, flat, newScope, guessNames, verba
        后面单独的「10级 / 攻击力」要挂回这个英雄。
        档位标签（「10级技能」这种）加粗也不能算英雄，否则它自己会变成英雄条目，
        后面的档位就挂不回真正的英雄了 */
-    const nk = name ? lexLookup(name) : null;
+    const tierHeroName = TIER_TITLE_RE.test(String(name)) ? String(name).replace(/^【[0-9]+阶】/, '').trim() : '';
+    const nk = name ? lexLookup(tierHeroName || name) : null;
     const desc = buildDesc(body, verbatim);
     /* 行首编号会被 buildDesc 去掉：记下原编号，后面的编号续段靠它并回上一条 */
     const numM = String(first.text).match(/^([0-9]{1,2})[.、．](?![0-9])/);
+    /* 阵营 / 效果牌分类作为父级，供后面的编号小节带上名字 */
+    if (scopeState && /(?:阵营|效果牌)$/.test(String(full).trim())) scopeState.scope = String(full).trim();
+    /* 「天赋名 · 英雄名」这种卡（永不失约 · 百里守约）后面跟着的「10级 / 攻击力」
+       也属于它，按英雄卡处理，否则档位会被拆成一张标题为「10级」的独立卡 */
+    const dotTail = String(full).split(/·|・/).pop().trim();
+    const dotLk = dotTail && dotTail !== String(full) ? lexLookup(dotTail) : null;
     items.push({
       t: full.replace(/\s*·\s*/g, ' · '),
       d: nameNew && verbatim !== 'plain' ? wrapNewBody(desc) : desc,
       /* 这一条吃掉的原文行，出图页右侧「原文」栏直接显示这些句子。
          raw = 归一化之前的原话（「改动前」不会被改成「调整前」） */
       src: lines.slice(i, j).map(l => l.raw || l.text).join('\n'),
-      _hero: (!!first.bold || (!!nk && nk.kind === 'hero')) && !TIER_LABEL_RE.test(full.trim()),
+      _hero: (!!first.bold || !!tierHeroName || (!!nk && nk.kind === 'hero')
+        || (!!dotLk && dotLk.kind === 'hero')) && !TIER_LABEL_RE.test(full.trim()),
       /* 原文以冒号收尾（「…做如下调整：」），说明后面还有续段 */
       _cont: /[：:]\s*$/.test((body[body.length - 1] || '').trim()),
       /* 正文原始行：「调整后」单独成段时并回上一条重新压箭头要用 */

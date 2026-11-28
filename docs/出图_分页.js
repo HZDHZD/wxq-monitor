@@ -291,9 +291,6 @@ function paginateBalanced(base, units, scale, painter, ctx, startNo = 0) {
     return { h: r.bottom - r.top, cap: r.safe - r.top };
   };
   const capB = probe([], true).cap;
-  /* 尾页达到 20% 容量就算正常，保持贪心结果 */
-  if (probe(greedy[n - 1], true).h >= capB * 0.2) return greedy;
-
   /* 页尾不能落在章节头/分组头/子标题/只有标题的条目上 */
   const canEnd = (u) => {
     if (!u || u.kind !== 'item') return false;
@@ -307,6 +304,27 @@ function paginateBalanced(base, units, scale, painter, ctx, startNo = 0) {
   const last = greedy[n - 1];
   const noTitlePrev = startNo + n - 2 > 0;
   const capA = probe([], noTitlePrev).cap;
+  /* 尾页超过 20% 就算正常，原样保留，不为了「更好看」再挪内容 */
+  if (probe(last, true).h >= capB * 0.2) return greedy;
+  /* 尾页不足 20%、又恰好只剩同一分组的半截（分组头和前几条在上一页，
+     最后一条单独成页，如「效果牌调整」的「归元复始」）：整组一起搬到尾页，
+     既不拆分组，尾页也不再是一张孤卡 */
+  const tailItem = last.find(u => u.kind === 'item');
+  if (tailItem) {
+    let k = prev.length - 1;
+    while (k >= 0 && !(prev[k].kind === 'grp' && prev[k].grpName === tailItem.grpName)) k--;
+    if (k > 0 && k < prev.length - 1) {
+      const a = prev.slice(0, k);
+      const b = prev.slice(k).concat(last);
+      const hb = probe(b, true).h;
+      if (canEnd(a[a.length - 1]) && hb <= capB) {
+        const ha = probe(a, noTitlePrev).h;
+        if (ha >= capA * 0.35) {
+          return greedy.slice(0, n - 2).concat([a, b]);
+        }
+      }
+    }
+  }
   /* 从上一页尾部搬 m 条到尾页，取两页填充率中较低者最大的方案：
      尾页不至于只剩一小块，上一页也不会被摊得太空。
      上一页低于 40% 或尾页溢出时停止（m 再大只会更糟） */
@@ -578,8 +596,13 @@ function render() {
      只对全局第一章生效，局外那套照常画 */
   const firstSec = state.sections[0];
   const firstBarless = !!firstSec && (!String(firstSec.name || '').trim() || isCoreSec(firstSec));
+  /* 合并开关：第一章之后直接接局外章节，共用一张封面、页码连续、章节序号一路往下排。
+     导出菜单显式选「局内 / 局外」时仍单独出篇，只有预览和「全部」走合并册 */
+  const merged = !!state.mergeParts && renderScope !== 'in' && renderScope !== 'out';
   const sets = [];
-  if (state.setSplit) {
+  if (merged) {
+    sets.push({ st: { name: '', label: '', partName: '', sections: state.sections, key: 'merged' }, si: 0, merge: true });
+  } else if (state.setSplit) {
     /* 打开分套：局内 / 局外各自一次成组，同篇内跨章节的重名组能一起去重 */
     const pushSets = (secs, partName, baseIdx) => {
       buildPartSets(secs, partName).forEach(st => sets.push({ st, si: baseIdx + st.secIndex }));
@@ -596,18 +619,29 @@ function render() {
   }
 
   pagesCache = [];
-  sets.forEach(({ st, si }) => {
-    /* 章节序号从「一、」重排；整篇时后面的章节依次往下排 */
+  sets.forEach(({ st, si, merge }) => {
+    /* 合并册后面还接着局外章节，第一章标题条必须画出来，「一、二、…」才连贯；
+       只有第一章本来一个字名字都没有（体验服常见）才不画，序号从后面的章节开始算 */
+    const hideFirst = merge ? !(st.sections[0] && String(st.sections[0].name || '').trim())
+      : (si === 0 && firstBarless);
+    const noOffset = (merge && hideFirst) ? 1 : 0;
+    /* 章节序号从「一、」重排；整篇 / 合并时后面的章节依次往下排 */
     const b = Object.assign({}, base, {
-      sections: st.sections.map((sec, i) => Object.assign({}, sec, { name: renumberSec(sec.name, i + 1) })),
-      sub: setSub(base, st.partName),
-      theme: st.partName,
+      sections: st.sections.map((sec, i) => Object.assign({}, sec, {
+        name: renumberSec(sec.name, i + 1 - noOffset)
+      })),
+      /* 合并册不分篇：副标题只留「正式服更新」，封面胶囊也不带篇名 */
+      sub: merge
+        ? (String(base.server || '').trim() ? `${base.server}更新` : '')
+        : setSub(base, st.partName),
+      theme: merge ? '' : st.partName,
       setNames: st.label,
-      hideFirstBar: si === 0 && firstBarless
+      hideFirstBar: hideFirst
     });
     /* 空分组不出封面，也不占页码 */
     if (!flattenUnits(b.sections, b.hideFirstBar).length) return;
     const pgs = [{ cover: true, cfg: b }].concat(fitSetPages(ctx, b, paintSunset, fixedScale, st.key));
+    /* 合并册只有一册：套名留空，导出文件名按 _1、_2 连续编号 */
     pgs.forEach((pg, j) => { pg.setName = st.name; pg.setIndex = j; });
     pagesCache.push(...pgs);
   });
@@ -615,10 +649,12 @@ function render() {
   if (!pagesCache.length) {
     const partName = scope === 'out' ? '局外更新篇' : '局内平衡篇';
     const b = Object.assign({}, base, {
-      sections: [], sub: setSub(base, partName), theme: partName, setNames: '',
+      sections: [],
+      sub: merged ? (String(base.server || '').trim() ? `${base.server}更新` : '') : setSub(base, partName),
+      theme: merged ? '' : partName, setNames: '',
       hideFirstBar: true
     });
-    pagesCache = [{ cover: true, cfg: b, setName: partName, setIndex: 0 }];
+    pagesCache = [{ cover: true, cfg: b, setName: merged ? '' : partName, setIndex: 0 }];
   }
   if (pageIdx > pagesCache.length - 1) pageIdx = pagesCache.length - 1;
   if (pageIdx < 0) pageIdx = 0;

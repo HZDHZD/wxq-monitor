@@ -285,7 +285,22 @@ function nestChessKids(sections) {
     /* 棋手和英雄会重名（镜、安琪拉…），按分组名判断是哪一边，再用对应名单认人 */
     const isHeroGroup = /英雄/.test(g.name || '');
     const NAMES = isHeroGroup ? HERO_NAME_SET : LORD_NAME_SET;
-    const isAnchor = name => NAMES.has(lexNorm(name));
+    /* 棋手组还要认特殊库里的「棋手:名字」：新版本刚上线、素材里还没有的棋手
+       由 learnChessNames 记进特殊库，同一次解析就要能挂技能。
+       英雄组仍只看英雄名单，避免「镜」这类两边都有的名字认错边 */
+    /* 组合名「前缀·名单里的名字」（叛誓者·牛魔、神巫·云中君）：后半才是英雄本名，
+       按后半认人；整条仍保留完整标题，不能挂到上一位英雄名下 */
+    const lastPart = name => {
+      const p = String(name).replace(/[【】]/g, '').split(/[·・]/).map(s => s.trim()).filter(Boolean);
+      return p.length > 1 ? p[p.length - 1] : '';
+    };
+    const isAnchor = name => NAMES.has(lexNorm(name))
+      || NAMES.has(lexNorm(lastPart(name)))
+      || (!isHeroGroup && (lexLookup(name) || {}).kind === 'lord')
+      /* 英雄组里「前缀·名字」是卡名（叛誓者·牛魔 / 神巫·云中神君）：
+         新赛季卡的名字不一定已进名单，但仍然是一张独立的英雄卡，
+         不能挂到上一位英雄名下 */
+      || (isHeroGroup && !!lastPart(name));
     const lordAt = new Map();
     g.items.forEach(it => {
       if (!it.t) return;
@@ -452,11 +467,59 @@ function auditNotice(data) {
 }
 
 /* ====================  导出  ==================== */
+/* 公告里第一次出现、名单里没有的新棋手，记成特殊库的「棋手:名字」。
+   两种情形都认：
+   1) 技能名还在素材里 → 「太乙 · 全体等级 · 彩色扭蛋」被并成一条，按技能归属反推棋手名
+   2) 素材里连技能都没有 → 组里那条纯汉字短标题（2~5 字、有正文）就是新棋手名
+   记下后本次重新解析一遍，立刻能挂技能；导出 JSON 带给出图端，导出图片时写回 特殊库.js。 */
+function learnChessNames(sections) {
+  const added = [];
+  const lib = window.LEX_SPECIAL || (window.LEX_SPECIAL = []);
+  const add = raw => {
+    const t = String(raw || '').trim();
+    /* 纯汉字 2~5 字才可能是棋手名；档位/结构/分类词一概不认 */
+    if (!/^[\u4e00-\u9fa5]{2,5}$/.test(t)) return;
+    if (NOT_NAME_RE.test(t) || STRUCT_LABEL_RE.test(t) || TIER_LABEL_RE.test(t) || SUB_RE.test(t)) return;
+    if (lexLookup(t)) return;
+    const tag = '棋手:' + t;
+    if (lib.includes(tag)) return;
+    lib.push(tag);
+    added.push(t);
+  };
+  (sections || []).forEach(sec => (sec.groups || []).forEach(grp => {
+    if (!/棋手/.test(grp.name || '')) return;
+    (grp.items || []).forEach(it => {
+      const t = String(it.t || '').trim();
+      if (!t || it.sub) return;
+      /* 素材里技能名还在、棋手名没了：「新棋手 · 已有技能」会被解析并成一条，
+         靠技能的名单归属反推棋手名（太乙 · 全体等级 · 彩色扭蛋） */
+      const m = t.match(/^([\u4e00-\u9fa5]{2,5})\s*[·・]\s*(.+)$/);
+      if (m && !lexLookup(m[1].trim()) && skillOwner(m[2].trim()) === m[1].trim()) {
+        add(m[1]);
+        return;
+      }
+      /* 素材里连技能名都没有：新棋手是组里的一条纯名字短标题，内容全在正文里。
+         名单查不到、又不是档位词，就按新棋手收下 */
+      if (!String(it.d || '').trim() && !(it.kids && it.kids.length)) return;
+      add(t);
+    });
+  }));
+  return added;
+}
+
 /* 整篇一起给：第一篇是第一章（局内），其余章节是局外原文。
    出图端只保留一个导入框，不再分两次导入、也不再经过 AI */
 function wholeData() {
-  const data = collect();
+  let data = collect();
+  /* 先认新棋手再挂技能：太乙这类人名的原始条目此时还是独立短标题 */
+  const learned = learnChessNames(data.sections);
   nestChessKids(data.sections);
+  if (learned.length) {
+    data = collect();
+    nestChessKids(data.sections);
+    setStatus('已自动收录新棋手：' + learned.join('、'), 'ok');
+  }
+  data.learnedLords = learned;
   data.audit = auditNotice(data);
   /* 整篇原文一起带走：出图页右侧「原文」栏整段显示，自己滚着看 */
   if (lastRawText) data.rawText = lastRawText;

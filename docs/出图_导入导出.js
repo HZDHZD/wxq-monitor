@@ -137,6 +137,15 @@ function importInto(tipEl) {
       audit = o.audit || null;
       rawText = String(o.rawText || '');
       rawHtml = String(o.rawHtml || '');
+      /* 提炼端公告里自动收录的新棋手：带进内存，导出图片时写回 特殊库.js */
+      const learnedLords = Array.isArray(o.learnedLords) ? o.learnedLords : [];
+      if (learnedLords.length) {
+        const lib = window.LEX_SPECIAL || (window.LEX_SPECIAL = []);
+        learnedLords.forEach(n => {
+          const tag = '棋手:' + String(n || '').trim();
+          if (String(n || '').trim() && !lib.includes(tag)) lib.push(tag);
+        });
+      }
     }
   } catch (_) { /* 不是对象就视为没有自查结果 */ }
   /* 整篇公告原文：右侧栏渲染（旧 JSON 没这字段时留空，栏里退回纯文本/条目原句） */
@@ -295,7 +304,10 @@ async function saveSpecialLex(dir) {
     });
   }));
   const names = rawNames.map(n => window.specialUsable(n)).filter(Boolean);
-  if (!names.length) return 0;
+  /* 公告里自动收录的新棋手（棋手:名字）也一起写回，素材没有也长期有效 */
+  const learned = (Array.isArray(window.LEX_SPECIAL) ? window.LEX_SPECIAL : [])
+    .map(n => String(n || '').trim()).filter(n => /^棋手[:：]/.test(n));
+  if (!names.length && !learned.length) return 0;
 
   /* 只认项目根目录：目录里得有提炼页，否则宁可跳过也不乱写 */
   try { await dir.getFileHandle('公告提炼.html'); } catch (_) { return 0; }
@@ -313,7 +325,7 @@ async function saveSpecialLex(dir) {
 
   const seen = new Set(list.map(n => window.specialKey(n)).filter(Boolean));
   let added = 0;
-  names.forEach(n => {
+  names.concat(learned).forEach(n => {
     const k = window.specialKey(n);
     if (!k || seen.has(k)) return;
     list.push(n);
@@ -325,6 +337,7 @@ async function saveSpecialLex(dir) {
   const text = '/* ==== 特殊库：官方名单外的专有名词（模块 / 玩法 / 系统名） ====\n'
     + '   出图页「新增条目 / 新增分组 / 新增技能」时填的标题会自动追加到这里；\n'
     + '   公告提炼解析时，整行命中这里就按标题处理。\n'
+    + '   「棋手:名字」是公告里自动收录的新棋手（素材没有也能认）。\n'
     + '   想删掉某个词，直接删数组里的那一行即可。 */\n'
     + 'window.LEX_SPECIAL = ' + JSON.stringify(list, null, 2) + ';\n';
   const fh = await dir.getFileHandle('特殊库.js', { create: true });
@@ -336,14 +349,14 @@ async function saveSpecialLex(dir) {
 }
 /* =======================  导出水印  ======================= */
 /* 斜向平铺水印，参数沿用「加水印工具/watermark.py」：字体 40px、间距 294×212、
-   倾角 28°、不透明度 34/255、深蓝 rgb(31,78,121)，按 1080×1440 为基准等比缩放。
+   倾角 28°、不透明度 44/255、深蓝 rgb(31,78,121)，按 1080×1440 为基准等比缩放。
    只画在导出的 PNG 上；导出结束后的 render() 会把预览恢复干净 */
 const WM_TEXT = '万象棋小菜鸟';       /* 要换水印文字只改这一行 */
 function drawWatermark(ctx, W, H) {
   const k = Math.min(3, Math.max(0.35, Math.sqrt((W * H) / (1080 * 1440))));
   const fontPx = Math.round(Math.min(130, Math.max(14, 40 * k)));
   const stepX = Math.max(108, 294 * k), stepY = Math.max(80, 212 * k);
-  const base = 34, ang = 28 * Math.PI / 180;
+  const base = 44, ang = 28 * Math.PI / 180;
   /* 固定种子的伪随机：同一张图每次加的疏密/角度抖动都一样 */
   let seed = 7;
   const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };

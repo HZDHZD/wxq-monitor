@@ -115,20 +115,22 @@ function buildDescRaw(lines, verbatim) {
         if (body) segs.push(head ? head + '：' + body + '。' : body + '。');
         continue;
       }
-      const sb = seg.slice(bi, ai), sa = seg.slice(ai);
-      const sentenceLines = isSentenceLines(rawSideLines(sb), rawSideLines(sa));
-      segs.push(verbatim
-        ? arrowVerbatim(seg.slice(0, bi), sb, sa)
+      const sb = seg.slice(bi, ai), sp = splitDescNote(seg.slice(ai));
+      const ng = splitNewGroup(sp.body);
+      const sentenceLines = isSentenceLines(rawSideLines(sb), rawSideLines(ng.body));
+      const main = verbatim
+        ? arrowVerbatim(seg.slice(0, bi), sb, ng.body)
         : (composeLabeled(
           seg.slice(0, bi),
           sb.map(stripAdjust).filter(Boolean),
-          sa.map(stripAdjust).filter(Boolean)
+          ng.body.map(stripAdjust).filter(Boolean)
         ) || composeDesc(
           seg.slice(0, bi),
           sb.map(stripAdjust).filter(Boolean),
-          sa.map(stripAdjust).filter(Boolean),
+          ng.body.map(stripAdjust).filter(Boolean),
           { sentenceLines }
-        )));
+        ));
+      segs.push(joinDescNotes(withNewGroup(main, ng.added), sp.notes));
     }
     if (segs.length) return segs.join('\n');
   }
@@ -137,11 +139,52 @@ function buildDescRaw(lines, verbatim) {
   const bi = preIdx[0];
   const ai = lines.findIndex((s, i) => i > bi && /^调整后/.test(s));
   if (ai < 0) return plain();
-  const sb = lines.slice(bi, ai), sa = lines.slice(ai);
-  const sentenceLines = isSentenceLines(rawSideLines(sb), rawSideLines(sa));
-  if (verbatim) return arrowVerbatim(lines.slice(0, bi), sb, sa);
-  return composeLabeled(lines.slice(0, bi), sb.map(stripAdjust).filter(Boolean), sa.map(stripAdjust).filter(Boolean)) ||
-    composeDesc(lines.slice(0, bi), sb.map(stripAdjust).filter(Boolean), sa.map(stripAdjust).filter(Boolean), { sentenceLines });
+  const sb = lines.slice(bi, ai), sp = splitDescNote(lines.slice(ai));
+  const ng = splitNewGroup(sp.body);
+  const sentenceLines = isSentenceLines(rawSideLines(sb), rawSideLines(ng.body));
+  const main = verbatim
+    ? arrowVerbatim(lines.slice(0, bi), sb, ng.body)
+    : (composeLabeled(lines.slice(0, bi), sb.map(stripAdjust).filter(Boolean), ng.body.map(stripAdjust).filter(Boolean)) ||
+      composeDesc(lines.slice(0, bi), sb.map(stripAdjust).filter(Boolean), ng.body.map(stripAdjust).filter(Boolean), { sentenceLines }));
+  return joinDescNotes(withNewGroup(main, ng.added), sp.notes);
+}
+
+/* 调整后内容后面还挂着一条独立说明（盘古「优化了1500层神力效果的描述…」）：
+   它不是调整后的数值，另起一行，别用「；」并进同一条箭头 */
+const DESC_NOTE_RE = /^(优化|修复|说明|注明|调整了|新增了|补充|统一|修正|(?:部分|其他|相关|以上|此外|同时|另外)[^。！？]{0,12}(?:调整|优化|修复|说明|修正|统一|更新))/;
+function splitDescNote(list) {
+  let n = 0;
+  while (list.length - n > 1 && DESC_NOTE_RE.test(String(list[list.length - 1 - n]).trim())) n++;
+  return n ? { body: list.slice(0, list.length - n), notes: list.slice(list.length - n) } : { body: list, notes: [] };
+}
+function joinDescNotes(main, notes) {
+  if (!notes.length) return main;
+  return [main].concat(notes.map(s => String(s).trim())).filter(Boolean).join('\n');
+}
+
+/* 「调整后」里原文自己写着「新增…」（新增潮声和鸣、海的馈赠）：这几行不是对
+   调整前的替换，是另外加的机制，和调整前拼箭头会跨句、套括号。
+   从这一行往后收，遇到现有识别器认得出的标签就停——认得出来说明是已有内容
+   （技能名 / 档位标签 / 三级标签），不是这次新加的；认不出的新名字继续留在组里 */
+function splitNewGroup(list) {
+  const i = list.findIndex(s => /^新增/.test(String(s).trim()));
+  if (i < 0) return { body: list, added: [] };
+  let j = i + 1;
+  for (; j < list.length; j++) {
+    const t = String(list[j]).trim();
+    const lead = t.split(/[：:]/)[0].trim();
+    if (TIER_LABEL_RE.test(t) || SUB_RE.test(t)
+      || (lexLookup(lead) || {}).kind === 'skill') break;
+  }
+  return { body: list.slice(0, i).concat(list.slice(j)), added: list.slice(i, j) };
+}
+/* 新增组单独成段；整组标新增色，出图端按区间上色 */
+function withNewGroup(main, added) {
+  if (!added.length) return main;
+  const rows = added.map(s => String(s).trim()).filter(Boolean)
+    .map(s => /[。！？]$/.test(s) ? s : s + '。');
+  if (!rows.length) return main;
+  return (main ? main.replace(/\s+$/, '') + '\n' : '') + '【新增】' + rows.join('\n') + '【/新增】';
 }
 
 /* 原文用「1./2./3.」分条：编号不是内容，去掉后每条单独一行。
@@ -213,6 +256,44 @@ function descNums(s) {
 }
 function descArrs(s) {
   return new Set(String(s).match(new RegExp(VAL_ARR_SRC, 'g')) || []);
+}
+/* 箭头全部落在方括号内时，方括号圈的是「被替换的那一段」，两侧数字按位置
+   一一对应；两侧数字序列完全一致说明这些值两版都写着、属于共用内容，
+   不能按「只在一侧出现」标金（撕裂「[撕裂：达到2层时…5%… → 伤口：达到
+   2层时…5%…]」两侧都是 2层/5%，不该标） */
+function clearSameBracketVals(s) {
+  const seqNums = str => {
+    const out = [];
+    const re = new RegExp(VAL_ARR_SRC + '|' + VAL_NUM_SRC, 'g');
+    let m;
+    while ((m = re.exec(str))) out.push(valKey(m[0], str[m.index + m[0].length] || ''));
+    return out;
+  };
+  return String(s).split('\n').map(line => {
+    if (line.indexOf('→') < 0) return line;
+    const spans = [];
+    let d = 0, st = -1;
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === '[') { if (!d) st = i; d++; }
+      else if (line[i] === ']' && d) { d--; if (!d && st >= 0) { spans.push([st, i + 1]); st = -1; } }
+    }
+    if (!spans.length) return line;
+    /* 只要有一个箭头落在方括号外，就不能整行清金（括号外本来就该按共用内容处理） */
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] !== '→') continue;
+      if (!spans.some(([a, b]) => i >= a && i < b)) return line;
+    }
+    let any = false, allSame = true;
+    spans.forEach(([a, b]) => {
+      const inner = line.slice(a, b);
+      if (inner.indexOf('→') < 0) return;
+      any = true;
+      const parts = inner.slice(1, -1).replace(/【\/?改】/g, '').split('→');
+      const seqs = parts.map(seqNums);
+      if (!seqs.length || !seqs.every(q => q.length === seqs[0].length && q.every((v, i) => v === seqs[0][i]))) allSame = false;
+    });
+    return any && allSame ? line.replace(/【\/?改】/g, '') : line;
+  }).join('\n');
 }
 function markChangedVals(text, lines) {
   let t = String(text || '');
@@ -445,13 +526,27 @@ function markChangedVals(text, lines) {
     /* 档位行（「10级：」）里数值段被截成了一小串「100+100%」，
        拿它去比相似度匹配不到原句；带上档位前缀再查 */
     const seenTxt = tier ? t.slice(lineStart(la), lb) : lt;
-    const lr = ctxRight(lt, tier, tier ? seenTxt : null);
+    /* 箭头旁边只剩一个数字（潮汐「额外等级+5 → +3」）：数字拿去和分句比，
+       最长公共子串占短句的比例永远是 1（「5」在「英雄等级+5」里），
+       会配到第一个含这个数字的分句，右边的同值把它吃掉就漏标。
+       这种短数值段直接用箭头所在分句的文字去配对 */
+    const bare = COMPRESS_CFG.ctxBareClause && !tier && !/[\u4e00-\u9fa5]/.test(lt);
+    let lr = bare ? null : ctxRight(lt, tier, tier ? seenTxt : null);
+    if (bare) {
+      let k = la;
+      while (k > 0 && !/[，,；;。：:\n→]/.test(t[k - 1])) k--;
+      const q = t.slice(k, lb).replace(/【[^】]*】/g, '');
+      if (q !== lt) lr = ctxRight(q);
+    }
     const ln = descNums(lt), lr2 = descArrs(lt), rn = descNums(rt), rr2 = descArrs(rt);
     /* 找不到对应的调整后分句时留空，交给后面的整段数值集合回退；
        不能拿右侧那一小段来比（「→ 回合开始时」里没有数字，会把左侧没变的
        「1张」判成变化，大改写区间里就会凭空标金） */
     segs.push({ a: la, b: lb, side: 'L', num: ln, arr: lr2, otherNum: rn, otherArr: rr2, rew,
-      afterNum: lr === null ? null : descNums(lr), afterArr: lr === null ? null : descArrs(lr) });
+      /* 【…】是牌面标签（【5能量】【4阶】），里面的数字不是这条数值的内容：
+         远洋宝藏「从5件 → 4件」的 5 会被标签【5能量】吃掉，判成没变 */
+      afterNum: lr === null ? null : descNums(lr.replace(/【[^】]*】/g, '')),
+      afterArr: lr === null ? null : descArrs(lr.replace(/【[^】]*】/g, '')) });
     segs.push({ a: ra, b: rb, side: 'R', num: rn, arr: rr2, otherNum: ln, otherArr: lr2, rew,
       afterNum: null, afterArr: null });
   };
@@ -562,6 +657,46 @@ function markChangedVals(text, lines) {
     di = dc + DEL_CLOSE.length;
   }
   const inDel = p => dels.some(r => p >= r[0] && p < r[1]);
+  /* 【5能量】【4阶】这类牌面标签：把整个标签当一个值来比，
+     标签没变（两侧都有「5能量」）就不标；标签变了才标里面的数字 */
+  const tagAt = p => {
+    const o = t.lastIndexOf('【', p), c = t.indexOf('】', p);
+    if (o < 0 || c < p) return null;
+    const text = t.slice(o + 1, c);
+    /* 只认短标签（【5能量】【4阶】）；中间隔着正文或箭头的不算 */
+    if (text.length > 10 || /[，。；：、\n→]/.test(text)) return null;
+    return { a: o, b: c, text };
+  };
+  const tagChanged = (p, tag) => {
+    const l = lTxt.replace(/\s/g, ''), r = rTxt.replace(/\s/g, '');
+    /* 标题带下来的牌面标签（远洋宝藏【4阶】【日落海】）两版原话里都没有，不算变化 */
+    if (!l.includes(tag.text) && !r.includes(tag.text)) return false;
+    const other = sideAt(p) === 'R' ? l : r;
+    return !other.includes(tag.text);
+  };
+  /* 方括号是压缩器给「被替换的那一段」划的边界：括号外的文字两版都写，
+     属于共用上下文。一行里的箭头全都落在方括号里时，括号外的数字不是被替换的值，
+     不按「只在一侧出现」标金（并购红利「[达到上限时 → 单回合内合成第4次时]随机获得1张…」） */
+  const brSpans = [];
+  {
+    let d = 0, st = -1;
+    for (let i = 0; i < t.length; i++) {
+      if (t[i] === '[') { if (!d) st = i; d++; }
+      else if (t[i] === ']' && d) { d--; if (!d && st >= 0) { brSpans.push([st, i + 1]); st = -1; } }
+    }
+  }
+  const inBracketAt = p => brSpans.some(([a, b]) => p >= a && p < b);
+  const sharedOutside = p => {
+    if (!brSpans.length || inBracketAt(p)) return false;
+    const ls = lineStart(p), le = lineEnd(p);
+    let arrows = 0;
+    for (let i = ls; i < le; i++) {
+      if (t[i] !== '→') continue;
+      if (!inBracketAt(i)) return false;
+      arrows++;
+    }
+    return arrows > 0;
+  };
   const marks = [];
   const re = new RegExp(VAL_ARR_SRC + '|' + VAL_NUM_SRC, 'g');
   let m;
@@ -579,9 +714,13 @@ function markChangedVals(text, lines) {
       && /^级[\u4e00-\u9fa5]/.test(t.slice(pos + tok.length))
       && (pos === 0 || /[。；，、：\n]/.test(t[pos - 1]))
       && !segAt(pos);
-    if (!inBig(pos) && !inVal(pos) && !inNew(pos) && !inDel(pos) && !tierHead && !/^\s*级[^\n。，；]{0,6}[：:]/.test(t.slice(pos + tok.length))) {
+    if (!inBig(pos) && !inVal(pos) && !inNew(pos) && !inDel(pos) && !tierHead && !sharedOutside(pos) && !/^\s*级[^\n。，；]{0,6}[：:]/.test(t.slice(pos + tok.length))) {
       const sg = segAt(pos);
-      if (sg && sg.rew) {
+      const tag = tagAt(pos);
+      if (tag) {
+        /* 牌面标签（【5能量】【4阶】）：整个标签一起比，标签没变就不标 */
+        if (tagChanged(pos, tag)) mark = true;
+      } else if (sg && sg.rew) {
         /* 整句重写：两侧数字没有对应关系，不标 */
       } else if (sg && sg.otherNum) {
         /* 左段的数字：右侧同一箭头里也写了、或它对应的那句调整后原文里本来就有
@@ -590,8 +729,12 @@ function markChangedVals(text, lines) {
            回「调整前」原文那一句里查一次（西施「…并眩晕周围的敌方单位2秒」两侧都没变） */
         const hit = x => (isArr ? x.has(tok) : numHit(x, key, isComp));
         const coR = sg.side === 'R' ? ctxLeft(clauseAt(pos), tierAt(pos)) : null;
+        /* 数字就在方括号里（方括号只圈被替换的那一段）：两侧按位置一一对应，
+           不再回原文分句里找同值——同一句里别的分句也写着这个数时（海诺
+           「[150+150% → 100+200%]」撞上子杖的「100+150%」）会被当成没变 */
+        const bracketed = inBracketAt(pos);
         /* 「10级：」这种档位标签不是数值，别拿它当「左侧本来就有这个数」 */
-        const after = sg.side === 'R'
+        const after = bracketed ? null : sg.side === 'R'
           ? (coR === null ? null
             : (isArr ? descArrs(coR) : descNums(coR.replace(/[0-9]+级[^0-9。，；]{0,6}[：:]/g, ''))))
           /* 匹配到的调整后分句里一个数字都没有时，回整段调整后不比：
@@ -631,8 +774,8 @@ function markChangedVals(text, lines) {
     out += t.slice(last, r.a) + VAL_OPEN + t.slice(r.a, r.b) + VAL_CLOSE;
     last = r.b;
   });
-  return (out + t.slice(last)).split('\uE000').join('').split('\uE001').join('')
-    .split(BIG_OPEN).join('').split(BIG_CLOSE).join('');
+  return clearSameBracketVals((out + t.slice(last)).split('\uE000').join('').split('\uE001').join('')
+    .split(BIG_OPEN).join('').split(BIG_CLOSE).join(''));
 }
 
 function buildDesc(lines, verbatim) {
@@ -641,6 +784,13 @@ function buildDesc(lines, verbatim) {
     return lines.map(s => String(s).trim()).filter(Boolean).join('\n');
   }
   let out = splitNumberedRules(splitActivityLines(buildDescRaw(lines, verbatim)));
+  /* 箭头统一出口：一句里并排多个箭头时补方括号（盘古） */
+  out = finalizeArrows(out);
+  /* 并列连词「并」后面那一项被替换时（「…100%暴击率并无敌 → 70%伤害减免」）：
+     连词留作两项之间的分隔，被替换的那一项用方括号划出来，
+     否则读成「并无敌」整体换成了 70% */
+  out = out.replace(/并\s*([^，。；\n\[\]]{1,14}?)\s*→\s*([^，。；\n\[\]]+?)\s*(?=[，。；]|\n|$)/g,
+    (m, l, r) => '并[' + l + ' → ' + r + ']');
   if (verbatim) {
     /* 全原文照抄时，编号小标题（2.战术特性 / 3.武器特性）另起一行，不跟在分号后面 */
     out = out.replace(/；\s*(?=[0-9]{1,2}[.、．])/g, '\n');
@@ -668,9 +818,17 @@ function isSubLabel(lines, i) {
   /* 这类分类名本身就是小标题：不依赖加粗，也不要求同一段里还有下一行，
      原文经常把它单独放在一个 <p> 里 */
   if (SUB_LABEL_RE.test(t)) return true;
+  /* S2 的编号小节（2.英雄调整 / 1.新增）不占一级标题 */
+  if (numHeadTitle(t)) return true;
   if (i >= lines.length - 1) return false;
   if (!l.bold) return false;
   if (/[。！？；：，、]$/.test(t)) return false;
+  /* 单独成段的加粗分类标题（商店效果牌 / 普通装备迭代 / 新增阵营：建木）：
+     下一行是编号小节、整行卡牌标题或名单里的名字时，这一行只是小节标签。
+     当前行本身是名单里的棋手/英雄时，它是条目名，不能降成小节 */
+  const selfLk = lexLookup(t);
+  if (i === 0 && l.bold && !(selfLk && (selfLk.kind === 'hero' || selfLk.kind === 'lord'))
+    && (numHeadTitle(lines[1].text) || cardTitleText(lines[1].text) || lexLookup(lines[1].text))) return true;
   return SUB_RE.test(t);
 }
 

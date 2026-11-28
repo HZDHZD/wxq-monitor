@@ -1,4 +1,172 @@
 /* 本文件由 公告提炼.html 拆出，按函数名定位（行号会漂移） */
+/* ====================  压缩策略可调项（集中在这里，改这里就好） ==================== */
+const COMPRESS_CFG = {
+  /* 回退时中间那行分隔文字（整行金色） */
+  fallbackSep: '↓ 调整后 ↓',
+  /* 一句里箭头数 ≥ bracketAt 时，给每一对加方括号（[旧 → 新]） */
+  bracketMultiArrow: true,
+  bracketAt: 2,
+  /* 标金配对：箭头旁只剩一个数字时，改用箭头所在分句的文字去配对（关掉＝旧口径） */
+  ctxBareClause: true,
+};
+/* 其余口径的单一来源：删除标记 DEL_OPEN/DEL_CLOSE 在 提炼_解析.js；
+   【改】标记与标金粒度在 提炼_标金.js 的 VAL_OPEN / numHit；
+   公共前后缀怎么合并见下面 compressPair 里的 sharedEdge / tryStrip。 */
+/* 两侧数字按「只在一侧出现＝变化」成对标金（和 markChangedVals 同一口径） */
+function markSideVals(one, other) {
+  const oNum = descNums(other), oArr = descArrs(other);
+  const re = new RegExp(VAL_ARR_SRC + '|' + VAL_NUM_SRC, 'g');
+  let out = '', last = 0, m;
+  while ((m = re.exec(one))) {
+    const tok = m[0];
+    const isArr = /[\/、~～]/.test(tok);
+    const nx = one[m.index + tok.length] || '';
+    const key = isArr ? tok : valKey(tok, nx);
+    const isComp = !isArr && /^[+＋]/.test(nx);
+    const hit = isArr ? oArr.has(tok) : numHit(oNum, key, isComp);
+    out += one.slice(last, m.index) + (hit ? tok : VAL_OPEN + tok + VAL_CLOSE);
+    last = m.index + tok.length;
+  }
+  return out + one.slice(last);
+}
+
+/* 回退样式：原文一行 / ↓ 调整后 ↓ / 调整后原文。
+   前缀（「初始法力值」「10级」）已经被正文包含时不再单独写一行；
+   变化数字在两侧成对标金（整段用 BIG 包住，标金时不再重复扫描） */
+function fallbackLayout(prefixLines, before, after) {
+  const para = s => {
+    const t = String(s || '').trim()
+      .replace(/^调整[前后][：:]?\s*/, '')
+      .replace(/[。；\s]+$/, '');
+    return t ? t + '。' : '';
+  };
+  const bs = before.map(para).filter(Boolean);
+  const as = after.map(para).filter(Boolean);
+  if (!bs.length && !as.length) return '';
+  const pfx = (prefixLines || []).map(s => String(s).trim()).filter(Boolean)
+    .join('；').replace(/[：:；。\s]+$/, '');
+  const hasPfx = !!pfx && !!bs[0] &&
+    (bs[0].startsWith(pfx) || bs[0].startsWith(pfx + '为') || bs[0].startsWith(pfx + '是'));
+  const head = (pfx && !hasPfx) ? pfx + (/[：:]$/.test(pfx) ? '' : '：') + '\n' : '';
+  const bTxt = bs.map(s => markSideVals(s, as.join(''))).join('\n');
+  const aTxt = as.map(s => markSideVals(s, bs.join(''))).join('\n');
+  if (!aTxt) return bTxt ? BIG_OPEN + head + bTxt + BIG_CLOSE : '';
+  return BIG_OPEN + head + bTxt + '\n【改】' + COMPRESS_CFG.fallbackSep + '【/改】\n' + aTxt + BIG_CLOSE;
+}
+
+/* 一句里并排多个箭头时，给每一对单独加方括号：
+   「获得50% → 30%最大生命值，50 → 30点双防」→
+   「获得[50% → 30%]最大生命值，[50 → 30]点双防」。
+   已经由压缩器括过的行（含 [ ]）不再处理，避免套两层 */
+const NUM_RUN = '[+\\-−×]?(?:[0-9]+(?:\\.[0-9]+)?[%％]?[+＋])*[0-9]+(?:\\.[0-9]+)?[%％]?(?:[\\/、~～][0-9]+(?:\\.[0-9]+)?[%％]?)*';
+function arrowBracketSpan(line, i) {
+  /* 左侧：紧挨箭头的那个数值；没有数值就不括（跨句箭头 / 整段替换） */
+  let lEnd = i;
+  while (lEnd > 0 && /\s/.test(line[lEnd - 1])) lEnd--;
+  let lStart;
+  const lm = new RegExp('(' + NUM_RUN + ')$').exec(line.slice(Math.max(0, lEnd - 40), lEnd));
+  if (lm) lStart = lEnd - lm[1].length;
+  else {
+    let k = lEnd;
+    while (k > 0 && !/[，,；;。：:\n]/.test(line[k - 1])) k--;
+    lStart = k;
+  }
+  /* 右侧：紧挨箭头的数值；没有就不括 */
+  let rStart = i + 1;
+  while (rStart < line.length && /\s/.test(line[rStart])) rStart++;
+  let rEnd;
+  const rm = new RegExp('^' + NUM_RUN).exec(line.slice(rStart, rStart + 40));
+  if (rm) rEnd = rStart + rm[0].length;
+  else {
+    let k = rStart;
+    while (k < line.length && !/[，,；;。：:\n]/.test(line[k])) k++;
+    rEnd = k;
+  }
+  while (rEnd > rStart && /\s/.test(line[rEnd - 1])) rEnd--;
+  /* 两侧不能跨句号/分号（跨句的配对已经在压缩阶段拆开，这里兜底）：
+     右支带着后面的分句时，只括到分句点之前，后面的内容留在括号外——
+     「A → B；C」不括的话读不出 C 属于调整前还是调整后 */
+  let ok = !/[。；]/.test(line.slice(lStart, i)) && !/[。；]/.test(line.slice(i + 1, rEnd));
+  if (!ok && !/[。；]/.test(line.slice(lStart, i))) {
+    const cut = line.slice(i + 1, rEnd).search(/[。；]/);
+    if (cut > 0) { rEnd = i + 1 + cut; ok = true; }
+  }
+  return { lStart, rEnd, ok, num: !!(lm && rm) };
+}
+/* 复合值两侧相同的前缀提到方括号外（「100+125% → 100+200%」→「100+[125% → 200%]」）：
+   箭头两侧只剩真正变化的数值，未变的 100 不会被当成配对值误判成「变了没标金」 */
+function factorArrowPrefix(text) {
+  return String(text || '').replace(
+    /\[([0-9]+(?:\.[0-9]+)?[%％]?[+＋])([^\[\]\n]+?) → \1([^\[\]\n]+?)\]/g,
+    '$1[$2 → $3]'
+  );
+}
+function finalizeArrows(text) {
+  if (!COMPRESS_CFG.bracketMultiArrow) return factorArrowPrefix(text);
+  const at = COMPRESS_CFG.bracketAt || 2;
+  /* 已经在方括号里的箭头跳过（压缩器按小句对齐时已经括过） */
+  const inBracket = (line, pos) => {
+    let d = 0;
+    for (let i = 0; i < pos; i++) {
+      if (line[i] === '[') d++;
+      else if (line[i] === ']') d = Math.max(0, d - 1);
+    }
+    return d > 0;
+  };
+  const joined = String(text || '').split('\n').map(line0 => {
+    let line = line0;
+    const n = line.split('→').length - 1;
+    if (n === 0) return line;
+    /* 压缩器可能只给其中一段括了（[A → B] → C）：混合行继续走下面的补括，
+       补不上再整行退回不括，同一句里不用两套边界规则 */
+    const brN = (line.match(/\[[^\[\]]*→[^\[\]]*\]/g) || [])
+      .reduce((c, b) => c + (b.match(/→/g) || []).length, 0);
+    if (brN === n) return line;
+    if (n < at) {
+      /* 单个箭头：只有「调整后还挂着分句」（A → B；C）这类边界不清的情况才括，
+         括到分号前，C 留在括号外。数值嵌在句子里的不括（边界本来清楚） */
+      if (n !== 1) return line;
+      const p0 = line.indexOf('→');
+      const semi = line.slice(p0 + 1).search(/[；;]/);
+      if (semi < 0) return line;
+      const lm = line.slice(0, p0).match(/[。；\n][^。；\n]*$/);
+      const lS = lm ? p0 - lm[0].length + 1 : 0;
+      const l = line.slice(lS, p0).trim();
+      const r = line.slice(p0 + 1, p0 + 1 + semi).trim();
+      if (!l || !r) return line;
+      return line.slice(0, lS) + '[' + l + ' → ' + r + ']' + line.slice(p0 + 1 + semi);
+    }
+    const spans = [];
+    let anchored = true;
+    for (let i = line.indexOf('→'); i >= 0; i = line.indexOf('→', i + 1)) {
+      if (inBracket(line, i)) continue;
+      const sp = arrowBracketSpan(line, i);
+      /* 混合行里没括的箭头要自己找数值落点：两侧都得有，找不到就整行退回不括 */
+      if (sp.ok && (!brN || sp.num)) spans.push(sp);
+      else if (brN) anchored = false;
+    }
+    if (brN && (anchored === false || spans.some((sp, k) => k > 0 && sp.lStart < spans[k - 1].rEnd)))
+      return line.replace(/\[([^\[\]]*)\]/g, '$1');
+    if (!spans.length) return line;
+    let out = '', last = 0;
+    spans.forEach(({ lStart, rEnd }) => {
+      if (lStart < last || rEnd <= lStart) return;
+      const seg = line.slice(lStart, rEnd);
+      const ai = seg.indexOf('→');
+      if (ai < 0) return;
+      /* 箭头两侧紧贴的逗号/分号不属于被替换的内容：
+         留在括号里会读成「每使用4次技能， → 使用后」 */
+      const left = seg.slice(0, ai).replace(/[\s，,、；;：:]+$/, '');
+      const right = seg.slice(ai + 1).replace(/^[\s，,、；;：:]+/, '');
+      if (!left || !right) return;
+      out += line.slice(last, lStart) + '[' + left + ' → ' + right + ']';
+      last = rEnd;
+    });
+    return out + line.slice(last);
+  }).join('\n');
+  return factorArrowPrefix(joined);
+}
+
 /* 两段文字共有的最长开头 / 结尾字数（结尾不越过开头已经共有的部分） */
 function sharedEdge(x, y) {
   const mn = Math.min(x.length, y.length);
@@ -7,6 +175,71 @@ function sharedEdge(x, y) {
   let s = 0;
   while (s < mn - p && x[x.length - 1 - s] === y[y.length - 1 - s]) s++;
   return Math.max(p, s);
+}
+
+/* ——— 跨句的配对：一个箭头不能从一句话跨到另一句 ———
+   两侧几乎不共用文字＝整段重写：内容一字不动，旧版/新版各成一段，
+   中间用「↓ 调整后 ↓」分隔（只标删不标增读不出新内容，
+   方括号箭头又会被读成「同一个值在改」） */
+function sentenceSwap(b, a) {
+  return BIG_OPEN + dLayout(b, a) + BIG_CLOSE;
+}
+/* 多句对多句：相似度够的算「同一句在改」，逐句压缩；其余整句删/增 */
+function alignSentences(b, a) {
+  const tail = s => (String(s).match(/[。！？]$/) || ['。'])[0];
+  const norm = s => String(s).replace(/[。！？；\s]+$/, '');
+  const bRaw = sentences(b), aRaw = sentences(a);
+  const bs = bRaw.map(norm).filter(Boolean), as = aRaw.map(norm).filter(Boolean);
+  if (bs.length < 2 && as.length < 2) return '';
+  const steps = bwAlignSents(bs, as);
+  let out = '';
+  /* 连着的删除句 / 新增句合成一段：一句一个【删】【新增】会读成碎块 */
+  let pend = '', pendTxt = '';
+  const flush = () => {
+    if (!pendTxt) return;
+    out += pend === 'del'
+      ? '【删】' + pendTxt + '（删除）【/删】'
+      : '【新增】' + pendTxt + '（新增）【/新增】';
+    pend = ''; pendTxt = '';
+  };
+  const push = (kind, txt) => {
+    if (pend && pend !== kind) flush();
+    pend = kind;
+    pendTxt += (pendTxt ? '。' : '') + txt;
+  };
+  for (const st of steps) {
+    if (st[0] === 'del') { push('del', bs[st[1]]); continue; }
+    if (st[0] === 'add') { push('add', as[st[1]]); continue; }
+    flush();
+    const x = bs[st[1]], y = as[st[2]];
+    const txt = x === y ? x : compressPair(x, y);
+    /* 压缩结果本身可能已经收过句（退回两行/整段渲染时），不再补一个句号 */
+    const done = /[。！？]$/.test(txt.replace(/[\uE002\uE003]/g, '').replace(/【\/改】|【\/新增】|【\/删】/g, ''));
+    out += txt + (done ? '' : tail(x === y ? bRaw[st[1]] : aRaw[st[2]]));
+  }
+  flush();
+  /* 逐句压缩里有整段重写（↓ 调整后 ↓）：句级那几块会连成一串「A ↓ B ↓ C」，
+     读者分不清哪行属于旧版。整段退回两段式，一次交代完 */
+  if (out.includes(COMPRESS_CFG.fallbackSep)) return sentenceSwap(b, a);
+  return out;
+}
+/* 句号/分号两侧的配对统一走这里：多句按句对齐；
+   单句看公共头尾，头尾够长就只写一次（「公共头[旧 → 新]公共尾」），
+   几乎没有公共内容说明两句话说的不是一回事，拆成两句分别标删、标增 */
+function crossSentence(b, a) {
+  const al = alignSentences(b, a);
+  if (al) return al;
+  const x = String(b).replace(/[。！？]+$/, ''), y = String(a).replace(/[。！？]+$/, '');
+  const mn = Math.min(x.length, y.length);
+  let p = 0;
+  while (p < mn && x[p] === y[p]) p++;
+  let s = 0;
+  while (s < mn - p && x[x.length - 1 - s] === y[y.length - 1 - s]) s++;
+  const shared = bwEffLen(x.slice(0, p)) + bwEffLen(x.slice(x.length - s));
+  /* 公共头尾太短、或两句话共用的字本来就少（相似度 < 0.5）：
+     不是同一句在局部替换，拆成两句分别标删、标增比长箭头清楚 */
+  if (shared < 6 || bwSim(x, y) < 0.5) return sentenceSwap(b, a);
+  return bwAffixFallback(b, a);
 }
 
 function compressPair(b, a) {
@@ -35,6 +268,8 @@ function compressPair(b, a) {
       if (bs[i] === as[i]) { if (out[out.length - 1] !== bs[i]) out.push(bs[i]); continue; }
       out.push(compressPair(bs[i], as[i]));
     }
+    /* 某一对是整段重写时，逐句拼接会写成「A ↓ B ↓ C」：整段退回一次两段式 */
+    if (out.some(s => String(s).includes(COMPRESS_CFG.fallbackSep))) return sentenceSwap(b, a);
     if (out.length) return out.join('');
   }
   /* 调整后只在末尾多一句括号说明（红莲炎甲「（生命恢复包含吸血效果）」）：
@@ -89,8 +324,11 @@ function compressPair(b, a) {
   let p = 0;
   const n = Math.min(b.length, a.length);
   while (p < n && b[p] === a[p]) p++;
-  /* 不要把数字、百分比、乘号这类 token 从中间切开（如 +10 → +12、×1.5 → ×2） */
-  while (p > 0 && p < b.length && TOKEN_RE.test(b[p - 1]) && TOKEN_RE.test(b[p])) p--;
+  /* 不要把数字从中间切开（如 150% → 180% 的「15|0」）；
+     但「30+90% → 30+100%」的切点在「+」之后，是干净的边界，不能回退，
+     否则右支会重复一遍没变的「30+」，读成「30+90% → 30+100%」 */
+  const NUMCH = /[0-9.%]/;
+  while (p > 0 && p < b.length && NUMCH.test(b[p - 1]) && NUMCH.test(b[p])) p--;
   /* 公共前缀末尾的「数字+量词」要保留在右侧，避免「2名A → B」丢掉数量；
      但某一侧已经整句相同时不要再回退，否则会把「永久-5」压成「-5 → 5」 */
   const mq = b.slice(0, p).match(QUANT_RE);
@@ -103,13 +341,35 @@ function compressPair(b, a) {
   }
   if (depth > 0 && openAt >= 0) p = openAt;
   let pre = b.slice(0, p), lb = b.slice(p), la = a.slice(p);
+  /* 公共前缀正好停在并列连词前（「牛魔」|「及其他已觉醒英雄等级+2」 vs
+     「牛魔等级+2，其他已觉醒英雄等级+1」）：左支以「及其/以及/及/和/与/或」
+     开头说明切点落在并列结构内部，硬压箭头会让左右两支都缺成分。
+     把切点退回最近的小句边界，让两侧都带上完整的主语 */
+  if (/^(?:及其|以及|及|和|与|或)/.test(lb) && /[：:，,；;。]/.test(pre)) {
+    const cut = Math.max(...['：', ':', '，', ',', '；', ';', '。'].map(ch => pre.lastIndexOf(ch)));
+    const back = pre.slice(cut + 1);
+    pre = pre.slice(0, cut + 1);
+    lb = back + lb;
+    la = back + la;
+  }
+  /* 一侧整段包住另一侧（「对命中的敌人造成50+180%… → 造成50+180%…」）：
+     只是多了一截或少了一截话，标删/标增比拉一个等长箭头清楚 */
+  if (bwEffLen(lb) >= 6 && bwEffLen(la) >= 4) {
+    if (lb.endsWith(la) && bwEffLen(lb.slice(0, lb.length - la.length)) >= 4)
+      return pre + DEL_OPEN + lb.slice(0, lb.length - la.length) + '（删除）' + DEL_CLOSE + la;
+    if (la.endsWith(lb) && bwEffLen(la.slice(0, la.length - lb.length)) >= 4)
+      return pre + lb + '【新增】' + la.slice(0, la.length - lb.length) + '（新增）【/新增】';
+  }
   /* 公共前缀只是修饰语、变化从数量词开始时（「场上随机5名英雄等级+8」→
      「场上随机英雄等级+5」）：把前缀提成公共的，右支就丢了修饰范围，
      读成「… → 英雄等级+5」。一侧的数量词在另一侧完全不存在时，两侧都写全 */
   const Q_HEAD_RE = /^[0-9]+(?:\.[0-9]+)?[名个张枚件点种位条回合层次]/;
   const mL = lb.match(Q_HEAD_RE), mR = la.match(Q_HEAD_RE);
   if (pre && ((mL && !/^[0-9]/.test(la) && !la.includes(mL[0]))
-    || (mR && !/^[0-9]/.test(lb) && !lb.includes(mR[0])))) return b + ' → ' + a;
+    || (mR && !/^[0-9]/.test(lb) && !lb.includes(mR[0])))) {
+    /* 整句对整句时不能用长箭头把两句并成一条（箭头会跨过句号），改走句级处理 */
+    return /[。；]/.test(b + a) ? crossSentence(b, a) : b + ' → ' + a;
+  }
   /* 「提升至 / 调整为」这类叙述词留在前缀里：它是两版共有的原文，
      去掉后同一篇公告里会出现「光辉伤害17% → 10+20%」和
      「导弹伤害提升至30+80% → 30+90%」两种写法 */
@@ -138,6 +398,10 @@ function compressPair(b, a) {
       la = conjM[0] + la;
     }
   }
+  /* 公共前缀停在「/」上（「0/80 → 0/60」）：右支不能省掉前面的分母，
+     两边都写全，否则读成「80 变成 60」丢掉「0/」 */
+  if (/[\/~～]$/.test(pre) && /^[0-9.%％]/.test(lb) && /^[0-9.%％]/.test(la))
+    return pre + lb + ' → ' + pre + la;
   /* 「第6/10回合 → 6/11回合」：公共前缀里的「第」只留在左边，右支成了残句，
      箭头两侧都带上「第」 */
   const ordPrefix = /第$/.test(pre) && /^[0-9]/.test(lb) && /^[0-9]/.test(la) ? '第' : '';
@@ -253,7 +517,24 @@ function compressPair(b, a) {
     return pre + dsep + DEL_OPEN + lb.slice(dsep.length) + '（删除）' + DEL_CLOSE;
   }
   /* 已把上一并列项复制到右支，不再剥公共后缀，否则会剥成「吸血 → 生命恢复和护盾效果」 */
-  if (conjDup) return pre + lb + ' → ' + ordPrefix + la;
+  if (conjDup) return /[。；]/.test(lb + la) ? crossSentence(b, a) : pre + lb + ' → ' + ordPrefix + la;
+  /* 调整后只改了左边第一句、左边剩下的分句整句被删（极速扭蛋「…获得10%临时等级，
+     战斗胜利+2生命值」→「…获得15%临时等级」）：第一句照常压短箭头，剩下的标删，
+     否则长箭头会把删掉的整句吞进右支，读成「战斗胜利+2生命值 → 15%临时等级」 */
+  {
+    const ls = splitClausesSep(lb), as = splitClausesSep(la);
+    /* 第一小句可以是纯数值（钟馗「初始法力值为60，战斗开始时充满法力值」
+       →「初始法力值为100」）：数值照常压短箭头，整句删掉的标删除 */
+    const numOnly = t => /^[+\-−＋]?[0-9]+(?:\.[0-9]+)?[%％]?$/.test(t);
+    if (ls.length >= 2 && as.length === 1 &&
+        (sharedEdge(ls[0].t, as[0].t) >= 2 || (numOnly(ls[0].t) && numOnly(as[0].t)))) {
+      const head = compressPair(ls[0].t, as[0].t);
+      const gone = ls.slice(1).map((x, k) => x.t + (k < ls.length - 2 ? (x.sep || '，') : '')).join('');
+      if (head && gone) {
+        return pre + head + (ls[0].sep || '，') + DEL_OPEN + gone + '（删除）' + DEL_CLOSE;
+      }
+    }
+  }
   /* 两侧只有括号里的内容不同：压缩括号内部，避免出现「（至多20枚） → 30枚）」 */
   const oi = OPEN_BR.indexOf(lb[0]);
   const cb = oi >= 0 ? CLOSE_BR[oi] : '';
@@ -324,9 +605,10 @@ function compressPair(b, a) {
       return pre + ' → ' + segN[0] + rawAdd + lb;
     }
   }
-  /* 公共前缀切在了名词和它的修饰语之间（右支以「的」开头）：就地写会读成
-     「其等级 → 的70%」这种残句，宁可整句两端全写 */
-  if (/^的地得/.test(la)) return b + ' → ' + a;
+  /* 公共前缀切在了名词和它的修饰语之间（右支以「的/了/地/得」开头）：
+     就地写会读成「其等级 → 的70%」「…物理伤害 → 的基础攻速提升20%」这种残句，
+     改走句级处理：两句话几乎不共用文字时拆成两句，旧句标删、新句标增 */
+  if (/^[的地得了]/.test(la)) return crossSentence(b, a);
   /* 后缀剥离后两侧紧邻后缀的词性必须一致：李元芳「1张精致古币 → 2张古币」里，
      调整前剥完只剩「1张精致」，量词和后面的名词被拆到箭头两边，读不出是什么 */
   const QCH = '张枚个名件点种位条回合层次';
@@ -334,6 +616,8 @@ function compressPair(b, a) {
   const quantTail = s => new RegExp('[0-9]+[' + QCH + ']$').test(s);
   /* 后缀开头是单位（「%」「万钻石」「秒」）时不能剥：左边只剩「15」「5」这种裸数字 */
   const UNIT_HEAD = '%千万张枚个名件点种位条回合层次秒元钻倍级星分米格';
+  /* 条件 / 时点收尾词：它们跟着前面的条件走，不能被切到后缀一侧 */
+  const COND_TAIL = '时后前中内';
   /* 左边以形容词结尾时不能剥：「真实 → 法术伤害」会让人以为是从「真实」改成「法术」 */
   const ADJ_TAIL = /(真实|物理|法术|魔法|额外|普通|最大|基础|全部|原有|当前)$/;
   /* 试剥 n 个字符的公共后缀，任何一条守卫命中就放弃，交给箭头形式 */
@@ -348,6 +632,15 @@ function compressPair(b, a) {
     if (cutComma) n -= pi;
     let l = lb.slice(0, lb.length - n), r = la.slice(0, la.length - n);
     let s = lb.slice(lb.length - n);
+    /* 后缀从「时 / 后 / 前 / 中 / 内」这类条件收尾词开始：它的前面是两侧各自的条件，
+       只把它留在后缀里会让左支停在「达到上限」这种半句上。同一个字两侧各带一份 */
+    if (s.length > 1 && COND_TAIL.indexOf(s[0]) >= 0 && COND_TAIL.indexOf(l.slice(-1)) < 0) {
+      l += s[0]; r += s[0]; s = s.slice(1);
+      if (s.length < 2) return '';
+    }
+    /* 数字和它后面的单位不能被拆到箭头两侧（「挥出1|道剑气」→「挥出1 → …」）：
+       左支停在数字（或小数点）上就不剥。数字完整落在后缀里属于共有内容，照常剥 */
+    if (/[0-9.]$/.test(l)) return '';
     /* 后缀被中间的逗号截短、两侧仍各带多个分句时，剥完会配错变化点
        （始祖熊灵「每攻击8次，…增加20% → 每攻击5次，…增加15%，…」），不剥 */
     if (cutComma && /[，,；;]/.test(l) && /[，,；;]/.test(r)) return '';
@@ -418,14 +711,32 @@ function compressPair(b, a) {
       sepMoved = '，';
     }
     const mid = compressPair(midL, r);
+    /* 残段压出来是整段回退（含换行 / D 方案分隔）或拆成了删/增两句时，
+       不能把公共后缀搬到外面：「…对命中的敌人。[删] [增] 造成…」把后缀
+       只留给后一句，前一句读成半句话 */
+    if (/[\n\uE002\uE003]|【删】|【新增】/.test(mid)) return '';
     /* 左支停在「改为 / 变为」这类动词上时，后面的逗号是它和宾语的停顿，
        跟着搬过来会读成「改为，获得1张高阶推演战术」（乘胜追击） */
     if (sepMoved && /(?:改为|变为|改成|变成|调整为|提升为|下降为|转换为)$/.test(mid)) sepMoved = '';
     /* 公共后缀以连词开头时（西施「并眩晕周围的敌方单位2秒」），它同时修饰
        调整前后两版；紧跟右支会读成「只有调整后才有眩晕」，用逗号断开 */
     const tailSep = /^(?:并且|并|且|同时|还|以及|和|与|及|或)/.test(s) ? '，' : '';
-    return pre + (ordPrefix && mid.indexOf(' → ') >= 0 ? mid.replace(' → ', ' → ' + ordPrefix) : mid) +
-      (sepMoved || tailSep) + s;
+    const midTxt = ordPrefix && mid.indexOf(' → ') >= 0 ? mid.replace(' → ', ' → ' + ordPrefix) : mid;
+    /* 剥掉公共后缀后，箭头两侧是文字（条件/短语），而共用尾巴留在括号外：
+       不括起来读不出尾巴属于哪一版（并购红利「达到上限时 → 单回合内合成第4次时随机获得…」）。
+       两侧都是数值时边界本来就清楚（「累计打出4 → 3张同阵营英雄牌时」），不括 */
+    const valOnly = t => {
+      const v = t.replace(/【[^】]*】/g, '');
+      return /[0-9]/.test(v) && !/[^\d.%＋+\-−×\/、~～\s]/.test(v);
+    };
+    const halves = midTxt.split(' → ');
+    /* 括号外同一句里没有任何共用文字时（括号就是整句），括号划不出边界，不括 */
+    const outLeft = pre.split(/[。！？]/).pop().trim();
+    const outRight = s.split(/[。！？]/)[0].replace(/^[，,；;、\s]+/, '').trim();
+    const bracketed = halves.length === 2 && !/[\[\]]/.test(midTxt) &&
+      (outLeft || outRight) &&
+      !(valOnly(halves[0]) && valOnly(halves[1]));
+    return pre + (bracketed ? '[' + midTxt + ']' : midTxt) + (sepMoved || tailSep) + s;
   }
   let out = tryStrip(sb);
   if (!out && sb >= 2 && sb < lb.length) {
@@ -472,6 +783,35 @@ function compressPair(b, a) {
       }
       return body + '，【新增】' + extra + '（新增）【/新增】' + (/[。！？]$/.test(rest) ? '。' : '');
     }
+  }
+  /* 两侧跨了句号/分号：一个箭头不能从一句话中间跨到另一句，改走句级处理 */
+  if (/[。；]/.test(lb + la)) {
+    const cs = crossSentence(b, a);
+    if (cs) return cs;
+  }
+  /* 单句对单句、两句话几乎不共用文字（相似度 < 0.5）：箭头会被读成
+     「同一个值在改」，改按句拆开、旧句标删、新句标增 */
+  if (bwEffLen(lb) >= 8 && bwEffLen(la) >= 8 && bwSim(lb, la) < 0.5)
+    /* 两段式对照必须写完整原文：只把剩余段拿去拆句，公共前缀就不会出现在
+       「↓ 调整后 ↓」下面那句里（冻结「冰霜：达到3层时」、女娲「额外」） */
+    return sentenceSwap(b, a);
+  /* 箭头左边最后一截没有数字、右边却以数字开头（「…觉醒并保留其当前等级 → 4阶英雄…」）：
+     前半句会被读成串到旧版，改按句拆开，旧句标删、新句标增 */
+  {
+    const lseg = lb.split(/[，；。：]/).pop() || '';
+    if (bwEffLen(lseg) >= 6 && !/[0-9]/.test(lseg) && /^[0-9]/.test(la))
+      return sentenceSwap(b, a);
+  }
+  /* 左支开头挂着并列连词（「…100%暴击率并无敌 → 70%伤害减免」）：连词属于两项之间的
+     分隔，不属于被替换的内容，留在箭头外（由方括号划出被替换的那一项） */
+  /* 两侧文字完全对不上（连一个公共字都没有，也不是纯数值替换）：这不是「同一个值在改」，
+     硬凑一个箭头会读成乱配，改走两段式 ↓ 调整后 ↓。
+     首字或尾字相同说明两者还落在同一个结构位置上（「达到上限时 → 单回合内合成第4次时」），
+     照常写成箭头 */
+  {
+    const numsOnly = s => /^[0-9.%％+\-−×\/、~～\s]+$/.test(String(s).replace(/【[^】]*】/g, ''));
+    if (sharedEdge(lb, la) < 1 && !(numsOnly(lb) && numsOnly(la)))
+      return BIG_OPEN + dLayout(b, a) + BIG_CLOSE;
   }
   return pre + lb + ' → ' + ordPrefix + rightPre + la;
 }
@@ -640,6 +980,12 @@ function composeDesc(prefixLines, before, after, opts) {
   /* 正文末尾的冒号/分号是悬空的（「…如下：」后面没有内容），去掉再补句号 */
   body = body.replace(/[：:；;]\s*$/, '');
   if (!body) return pfx ? pfx.replace(/[：:]\s*$/, '') + '。' : '';
+  /* 前缀和正文第一个词重复（钟馗「初始法力值：初始法力值为60…」）：
+     去掉正文里重复的标签，读成「初始法力值：60…」 */
+  if (pfx && pfx.indexOf('：') < 0 && body.startsWith(pfx)) {
+    const tail = body.slice(pfx.length).replace(/^(?:为|是)\s*/, '');
+    if (tail && !/^[，,。；;：:]/.test(tail)) body = tail;
+  }
   /* 大改写/方案 D 的输出末尾是 BIG_CLOSE（不可见），不能把它当成「没有句号」再补一个 */
   const end = /[。！？][\uE003]*$/.test(body) ? '' : '。';
   if (!pfx) return body + end;
@@ -658,11 +1004,16 @@ function composeDesc(prefixLines, before, after, opts) {
   if (pfxEnd) return pfx + '。' + body + end;
   /* 前缀以逗号收尾时直接接正文，别再补冒号（「…复生的英雄，：获得…」） */
   if (/[，,、]$/.test(pfx)) return pfx + body + end;
-  if (/[：:]$/.test(pfx)) return pfx + body + end;
+  /* 正文本身是多行（↓ 调整后 ↓、多档列举）：标签单独占一行，别把下面的整段
+     挤到标签后面（「玄雍士兵攻击速度调整：和蒙恬保持相同。↓ 调整后 ↓1。」） */
+  if (/[：:]$/.test(pfx)) return pfx + (body.includes('\n') ? '\n' : '') + body + end;
   /* 前缀自身带冒号但没在末尾收住（明先生「秘技任务：天降鸿运」）：冒号后的
      短词是这条调整的所属对象，用分号会读成两个并列动作 */
   const pfxTail = pfx.split(/[：:]/).pop() || '';
-  return pfx + (/[：:]/.test(pfx) && pfxTail.length <= 12 ? '，' : '：') + body + end;
+  /* 正文本身是多行（整段回退的「↓ 调整后 ↓」、多档列举）：前缀原文就是单独
+     一行，冒号后必须换行，不能把前置说明和下面的整段挤成一条长句 */
+  const br = body.includes('\n') ? '\n' : '';
+  return pfx + (/[：:]/.test(pfx) && pfxTail.length <= 12 ? '，' : '：') + br + body + end;
 }
 
 /* 调整前/调整后各有多行、且每行都是「对象：内容」时，这是机制/规则改写，
@@ -833,6 +1184,10 @@ function inlineDiff(bb, aa) {
      （护盾那条），只能退回两端全写 */
   const badText = blocks.some(x => {
     if (x.del === undefined || tailIns.has(x)) return false;
+    /* 变化段里带着分句标点（「及其 → 等级+2，」）：两版的分句顺序不一样，
+       字符级对齐会把一句话切成读不通的残句（牛魔「开团：牛魔及其 → 等级+2」），
+       交给压缩算法整段重写 */
+    if (/[，,；;：:]/.test(x.del + x.ins)) return true;
     if (/[0-9]/.test(x.del) && /[0-9]/.test(x.ins)) return false;
     /* 短的一侧是纯文字、另一侧带着数值（暴君「无敌 → 和70%伤害减免」）：
        这是把一条效果换成另一条，就地写读得通，共用前缀不会被卷进箭头 */
@@ -857,8 +1212,8 @@ function inlineDiff(bb, aa) {
       out += lead + '【新增】' + txt.slice(lead.length).replace(/[。！？]$/, '') + '（新增）【/新增】';
       return;
     }
-    /* 变化点前面是「30+」这种数值前缀时，把前缀带进箭头两侧，读成
-       「30+150% → 30+80%」，不从半个数字开始切 */
+    /* 变化点前面是「30+」这种数值前缀时，把前缀提到箭头外面括起变化段，读成
+       「30+[150% → 80%]」：不重复写「30+」，也不从半个数字开始切 */
     let pre = '';
     if (k > 0 && blocks[k - 1].eq !== undefined) {
       const m2 = /([0-9]+(?:\.[0-9]+)?\+)$/.exec(blocks[k - 1].eq);
@@ -866,7 +1221,7 @@ function inlineDiff(bb, aa) {
     }
     if (pre) {
       blocks[k - 1].eq = blocks[k - 1].eq.slice(0, -pre.length);
-      out = out.slice(0, -pre.length) + pre + blk.del + ' → ' + pre + blk.ins;
+      out = out.slice(0, -pre.length) + pre + '[' + blk.del + ' → ' + blk.ins + ']';
     } else {
       out += blk.del + ' → ' + blk.ins;
     }
@@ -892,8 +1247,12 @@ function arrowVerbatim(prefixLines, before, after) {
   const as = afterMain.map(tidy).filter(Boolean);
   const pfx = prefixLines.map(s => String(s).trim()).filter(Boolean)
     .map(s => s.replace(/[：:]\s*$/, '')).join('\n');
-  /* 导语本身已经带句号/逗号时不要再补冒号（否则出现「…数值。：」「…英雄，：」） */
-  const head = pfx ? (/[。！？；：，、]$/.test(pfx) ? pfx : pfx + '：') : '';
+  /* 导语本身已经带句号/逗号时不要再补冒号（否则出现「…数值。：」「…英雄，：」）。
+     导语是一句完整的说明（香香「6级天赋现在会计算…等级」）时，原文就是单独一行，
+     冒号后换行；只有「初始法力值」这类名词标签才和下面的内容接在同一行 */
+  const head = pfx
+    ? (/[。！？；：，、]$/.test(pfx) ? pfx : pfx + (hasPred(pfx) ? '：\n' : '：'))
+    : '';
   const newTail = extras.filter(Boolean)
     .map(s => '【新增】' + s.replace(/[。！？]$/, '') + '（新增）【/新增】。');
   /* 两侧同一行：只把两边完全相同的短标签提到箭头前 */
@@ -918,6 +1277,10 @@ function arrowVerbatim(prefixLines, before, after) {
     else if (inl) body = '\uE000' + inl + '\uE001';
     /* 压缩算法不一定带箭头：整段追加时它写成「原句。【新增】追加句（新增）【/新增】」 */
     else body = inlineMode ? compressPair(bb, aa) : bb + ' → ' + aa;
+    /* 压缩结果是多行回退块（原文 / ↓ 调整后 ↓ / 调整后）时，公共标签只在开头
+       写一次的话，调整后那行就丢了「冰霜：」，读成一句新话。
+       多行时把带标签的整句交给压缩器，让每一行都完整 */
+    if (tag && /\n/.test(body)) { body = compressPair(b, a); tag = ''; }
     /* 尾部可能是 BIG_CLOSE（不可见），不能只看它前面有没有句号就再补一个 */
     return tag + body + (/[。！？]$/.test(body.replace(/[\uE000\uE001]/g, '').replace(/[\uE003]+$/, '')) ? '' : '。');
   };
@@ -931,7 +1294,16 @@ function arrowVerbatim(prefixLines, before, after) {
     const one = bs.join('；') || as.join('；');
     main = one ? one + (/[。！？]$/.test(one) ? '' : '。') : '';
   }
-  return head + main + (newTail.length ? (main ? '\n' : '') + newTail.join('\n') : '');
+  /* 回退正文外面包着 BIG 标记，比前缀前先去掉不可见字符 */
+  const mainPlain = main.replace(/[\uE000-\uE004]/g, '');
+  /* 前缀和正文第一个词重复（钟馗「初始法力值：初始法力值为60…」）：
+     去掉正文里重复的标签，读成「初始法力值：60…」 */
+  if (pfx && pfx.indexOf('：') < 0 && mainPlain.startsWith(pfx)) {
+    const tail = main.slice(pfx.length).replace(/^(?:为|是)\s*/, '');
+    if (tail && !/^[，,。；;：:]/.test(tail)) main = tail;
+  }
+  const headOut = head;
+  return headOut + main + (newTail.length ? (main ? '\n' : '') + newTail.join('\n') : '');
 }
 
 /* 原文自己写着「（新增）」的（第一章全原文照抄，不会再生成标记），
@@ -1099,11 +1471,13 @@ function bwMarkNums(L, R) {
 /* 方案 D：内容不动，只调排版。两版几乎不共用文字、整段重写的条目，
    旧版、新版各成一段，中间用「↓ 调整后 ↓」分隔（比超长箭头直观） */
 function dRewrite(b, a) {
-  /* 0.69 是实测分界：弹簧/香香 0.48–0.53、乔汐（27 号 0.63 / 29 号 0.69）
-     都属改动分散在开头/中段/尾巴的整段重写；厉兵秣马（只换几张牌、几个回合）
-     0.82，武则天女帝权威 0.96，不能放进来 */
+  /* 0.75 是实测分界：弹簧/香香 0.48–0.53、乔汐（27 号 0.63 / 29 号 0.69 /
+     潮起潮落 0.694）、法术攻击力 0.727、逐鹿 0.734/0.741、镜像牌 0.737
+     都属改动分散在开头/中段/尾巴的整段重写，压成箭头会切词、夹「（删除）」；
+     甄姬 0.769 起箭头能读，厉兵秣马 0.82、武则天女帝权威 0.96 也不用动。
+     纯整段重写退回两段式不会读错，判定宁可宽一点 */
   /* 能逐小句对齐的不算重写：贷款协议那种「回合开始 → 结束」「本 → 下」
-     每对小句都有公共词，精细箭头比整段两段式更好读，相似度虽在 0.69 以内
+     每对小句都有公共词，精细箭头比整段两段式更好读，相似度虽在 0.75 以内
      仍保持原样 */
   const bcs = splitClausesSep(String(b).replace(/；/g, '，')).map(c => c.t);
   const acs = splitClausesSep(String(a).replace(/；/g, '，')).map(c => c.t);
@@ -1121,13 +1495,21 @@ function dRewrite(b, a) {
   }
   /* 大部分小句都是局部小改（贷款协议 4/4）就不是重写，保留精细箭头 */
   const alignable = bcs.length >= 2 && hit / bcs.length >= 0.75;
-  return !!bigRewrite(b, a) && !alignable && bwSim(b, a) < 0.69 &&
+  /* 一侧只有一个小句、另一侧多出两句以上（乔汐「等级+8 → 等级+5，触发3次，
+     若对象为…则额外…，每次使用后…」）：新内容整段铺开，一个箭头会读成
+     只改了前半句，改用两段式 */
+  if (Math.min(bcs.length, acs.length) <= 1 && Math.max(bcs.length, acs.length) >= 3) return true;
+  return !!bigRewrite(b, a) && !alignable && bwSim(b, a) < 0.75 &&
     Math.max(bwEffLen(b), bwEffLen(a)) >= 15;
 }
 function dLayout(b, a) {
   const para = s => {
-    const t = String(s).trim().replace(/[。！？]$/, '');
-    return t ? t + '。' : '';
+    /* 原文一侧以逗号收尾时，补句号会写成「…剑气，。」 */
+    const t = String(s).trim().replace(/[。！？]$/, '').replace(/[，,、；;：:]+$/, '');
+    if (!t) return '';
+    /* 整侧就是一个裸值（「1」「30%」）时不补句号：「1。」读起来像截断的句子 */
+    if (/^[0-9.%％+\-−×\/、~～\s]+$/.test(t)) return t;
+    return t + '。';
   };
   return para(b) + '\n【改】↓ 调整后 ↓【/改】\n' + para(a);
 }
@@ -1151,7 +1533,13 @@ function bwCommonSub(x, y) {
 }
 
 function bwSeg(x, y) {
-  if (x && y) return '[' + x + ' → ' + y + ']';
+  /* 箭头两侧真正变了的数字要标金（整段括进箭头时也一样）；
+     箭头边上的逗号不属于被替换的内容，留在括号里会读成「，→」 */
+  if (x && y) {
+    const x2 = x.replace(/[，,；;、]+$/, ''), y2 = y.replace(/^[，,；;、]+/, '');
+    const [l, r] = bwMarkNums(x2 && y2 ? x2 : x, x2 && y2 ? y2 : y);
+    return '[' + l + ' → ' + r + ']';
+  }
   if (x) return '【删】' + x + '（删除）【/删】';
   if (y) return '【新增】' + y + '（新增）【/新增】';
   return '';
@@ -1166,8 +1554,7 @@ function bwRenderBlock(oldT, newT) {
     return '【删】' + oldT + '（删除）【/删】【新增】' + newT + '（新增）【/新增】';
   }
   if ((bwIsNum(oldT) && bwIsNum(newT)) || total <= 12 || (sim >= 0.30 && total <= 30)) {
-    const [l, r] = bwMarkNums(oldT, newT);
-    return '[' + l + ' → ' + r + ']';
+    return bwBracket(oldT, newT);
   }
   const c = bwCommonSub(oldT, newT);
   /* 公共子串的边界落在数值符号上时（「…最终伤害-」+「50%」/「20%」），
@@ -1184,7 +1571,18 @@ function bwRenderBlock(oldT, newT) {
     const na = newT.slice(0, c.j), nb = newT.slice(c.j + c.len);
     return bwSeg(oa, na) + oldT.slice(c.i, c.i + c.len) + bwSeg(ob, nb);
   }
-  return '[' + oldT + ' → ' + newT + ']';
+  /* 整段括进箭头时也要标金：这一对里真正变了的数字要让读者一眼看到 */
+  return bwBracket(oldT, newT);
+}
+
+/* 把一对差异文字括成 [旧 → 新]：
+   两侧真正变了的数字标金；箭头边上的逗号是分句点，不属于被替换的内容 */
+function bwBracket(oldT, newT) {
+  const o2 = String(oldT).replace(/[，,；;、]+$/, '');
+  const n2 = String(newT).replace(/^[，,；;、]+/, '');
+  const keep = o2 && n2;
+  const [l, r] = bwMarkNums(keep ? o2 : oldT, keep ? n2 : newT);
+  return '[' + l + ' → ' + r + ']';
 }
 
 function bwEffLen(s) {
@@ -1261,14 +1659,46 @@ function bwAffixFallback(b0, a0) {
   let s = 0;
   while (s < minLen - p && b[b.length - 1 - s] === a[a.length - 1 - s]) s++;
   while (s > 0 && bwEffLen(b.slice(b.length - s)) < 4) s--;
+  /* 公共头/尾不能从一对【】/（）中间切开：度命之护「【5阶】【7能量】【河洛】获得…」
+     会把「】」剥到箭头外面，读成「【河洛 → 【4阶】【通用]】获得…」 */
+  const brDelta = t => {
+    let d = 0;
+    for (const ch of String(t)) {
+      if ('【（(「'.includes(ch)) d++;
+      else if ('】）)」'.includes(ch)) d--;
+    }
+    return d;
+  };
+  while (p > 0 && brDelta(b.slice(0, p))) p--;
+  while (s > 0 && brDelta(b.slice(b.length - s))) s--;
+  /* 剩余段以并列连词开头（「牛魔」|「及其他已觉醒英雄等级+2」 vs
+     「牛魔等级+2，其他已觉醒英雄等级+1」）：切点落在并列结构内部，
+     箭头左右都会缺成分。把头退到最近的小句边界，让两侧都带完整主语 */
+  if (/^(?:及其|以及|及|和|与|或)/.test(b.slice(p)) && /[：:，,；;。]/.test(b.slice(0, p))) {
+    const pre = b.slice(0, p);
+    const cut = Math.max(...['：', ':', '，', ',', '；', ';', '。'].map(ch => pre.lastIndexOf(ch)));
+    p = cut + 1;
+  }
   if (p + s >= minLen) { p = 0; s = 0; }
   const head = p ? b.slice(0, p) : '';
   const tail = s ? b.slice(b.length - s) : '';
-  const midB = b.slice(p, b.length - s);
-  const midA = a.slice(p, a.length - s);
+  /* 箭头两侧不能紧贴逗号（「每使用4次技能， → 使用后」）：逗号是分句点，
+     不属于被替换的内容，去掉后括号里只留文字 */
+  const trimL = t => t.replace(/[，,；;、]+$/, '');
+  const trimR = t => t.replace(/^[，,；;、]+/, '');
+  let midB = b.slice(p, b.length - s), midA = a.slice(p, a.length - s);
+  if (trimL(midB) && trimR(midA)) { midB = trimL(midB); midA = trimR(midA); }
   if (!midB && !midA) return b0;
   if (!midB) return head + '【新增】' + midA + '（新增）【/新增】' + tail + end;
   if (!midA) return head + '【删】' + midB + '（删除）【/删】' + tail + end;
+  /* 中间段里有分号/句号（武装分解：旧版的三条奖励列表整段换掉）：
+     括进箭头会读成「[：1件…；2件… → 并获得奖励]」，改成头尾共用、
+     中间整段标删 + 整段标增 */
+  if (/[。；]/.test(midB + midA)) {
+    return head + '【删】' + midB + '（删除）【/删】【新增】' + midA + '（新增）【/新增】' + tail + end;
+  }
+  /* 括号外没有任何共用的头/尾：括号圈的是整句，划不出边界，不括 */
+  if (!head && !tail) return midB + ' → ' + midA + end;
   return head + '[' + midB + ' → ' + midA + ']' + tail + end;
 }
 

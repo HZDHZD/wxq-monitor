@@ -76,6 +76,24 @@ function looksLikeItemName(t) {
 }
 /* 以「以下 / 本次」这类词开头的短句是正文引导语，不是条目名 */
 const NOT_HEAD_RE = /^(以下|如下|本次|此次|上述|以上|该|此|其|相关|其他|其余|所有|全部|后续|详细|具体|同时|另外|此外)/;
+/* S2 起的卡牌标题写法：整行本身就是标题，不能把标题并进正文
+   （【1阶】妲己 / 烽火令【1阶】【2能量】【通用】 / 虚无法杖→魂归低语） */
+const TIER_TITLE_RE = /^【[0-9]+阶】[\u4e00-\u9fa5·]{1,12}$/;
+const TAG_TITLE_RE = /^[\u4e00-\u9fa5·]{2,10}(?:【[^】]{1,8}】){1,4}$/;
+const RENAME_TITLE_RE = /^[\u4e00-\u9fa5·]{2,10}\s*→\s*[\u4e00-\u9fa5·]{2,10}$/;
+function cardTitleText(t) {
+  const s = String(t || '').trim();
+  if (TIER_TITLE_RE.test(s) || TAG_TITLE_RE.test(s) || RENAME_TITLE_RE.test(s)) return s;
+  return '';
+}
+/* 编号小节：「2.英雄调整」「1.新增」「2.调整」；
+   只认编号 + 短标题，编号后面直接跟正文的不算 */
+const NUM_HEAD_RE = /^[0-9]{1,2}[.、．](?:新增(?:[^，。；：、\s]{1,6})?|调整|更新|优化|修复|[^，。；：、\s]{1,6}(?:调整|更新|优化|修复))$/;
+function numHeadTitle(t) {
+  const s = String(t || '').trim();
+  if (!NUM_HEAD_RE.test(s)) return '';
+  return s.replace(/^[0-9]{1,2}[.、．]/, '').trim();
+}
 /* 没加粗的短名以「调整 / 更新 / 修复 / 说明」收尾时，只在这一段后面还有正文
    的情况下才认成条目标题：「王中王匹配逻辑调整」是条目名，不是三级标签 */
 function looksLikeEndingName(t) {
@@ -108,7 +126,21 @@ const LEX_INDEX = (() => {
   Object.keys(L.skills || {}).forEach(owner => (L.skills[owner] || []).forEach(n => add('skill', n, owner)));
   return map;
 })();
-function lexLookup(s) { return LEX_INDEX.get(lexNorm(s)) || null; }
+/* 特殊库里以「棋手:名字」记录的新棋手：公告里自动收录，素材长期没有也能认 */
+function specialLordLookup(s) {
+  const k = lexNorm(s);
+  if (!k) return null;
+  for (const raw of (window.LEX_SPECIAL || [])) {
+    const m = /^棋手[:：](.+)$/.exec(String(raw).trim());
+    if (m && lexNorm(m[1]) === k) return { kind: 'lord', name: m[1].trim() };
+  }
+  return null;
+}
+function lexLookup(s) {
+  const k = lexNorm(s);
+  if (!k) return null;
+  return LEX_INDEX.get(k) || specialLordLookup(s);
+}
 
 /* ====================  特殊库  ==================== */
 /* 官方名单外的模块 / 玩法 / 系统名，由出图页新增条目时记进 特殊库.js。
@@ -127,6 +159,8 @@ function isStartLine(lines, i) {
   const l = lines[i];
   /* 结构标签永远不是条目名（加粗也一样）：它们是上一条的对照正文 */
   if (STRUCT_LABEL_RE.test(l.text.trim()) || SUB_SECTION_RE.test(l.text.trim())) return false;
+  /* S2 的整行标题与编号小节：上一句是否收尾都要另起一条 */
+  if (cardTitleText(l.text) || numHeadTitle(l.text)) return true;
   /* 特殊库里确认过的专有名词，整行命中就直接当标题起头，不靠加粗猜 */
   if (specialLookup(l.text)) return true;
   if (l.bold) return true;

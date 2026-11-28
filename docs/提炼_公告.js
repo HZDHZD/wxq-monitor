@@ -9,7 +9,7 @@ function parseNotice(html) {
   const sections = [];
   let sec = null, grp = null;
   /* 棋手分组内跨分块共用的角色名（平铺公告按「调整前/调整后」切块解析） */
-  let grpState = { role: '' };
+  let grpState = { role: '', scope: '' };
   /* 当前章节是否全原文模式 */
   let secRaw = false;
   /* 「新增天赋」这类小标题管住后面连续的内容，直到出现「天赋调整」一类的标题。
@@ -55,7 +55,7 @@ function parseNotice(html) {
     if (!sec) openSec('未分类');
     grp = { name, items: [] };
     sec.groups.push(grp);
-    grpState = { role: '' };
+    grpState = { role: '', scope: '' };
     lastHeroItem = null;
   };
 
@@ -87,6 +87,14 @@ function parseNotice(html) {
     const last = grp.items[grp.items.length - 1];
     const blkSrc = (adjSrc || blk).join('\n');
     adjSrc = null;
+    /* 英雄卡后面的「卡牌效果调整」小节 + 调整前/后块：并回英雄卡，不单独留小节 */
+    if (last && last.sub && lastHeroItem && grp.items[grp.items.length - 2] === lastHeroItem
+      && /觉醒[前后][：:]/.test(blkSrc)) {
+      lastHeroItem.d = (lastHeroItem.d ? String(lastHeroItem.d).replace(/\s+$/, '') + '\n' : '') + last.t + '\n' + d;
+      addSrc(lastHeroItem, blkSrc);
+      grp.items.pop();
+      return;
+    }
     if (last && last.t && !last.d && !last.sub) { last.d = d; addSrc(last, blkSrc); }
     /* 「调整后」单独成段、前一段是同一个条目的「调整前」：并回去重压箭头，
        否则两版会拆成两张卡，数值也压不成箭头（神机） */
@@ -126,13 +134,59 @@ function parseNotice(html) {
         lastHeroItem = it;
       } else if (lastHeroItem && it.t && !it.sub && grp.items[grp.items.length - 1] === lastHeroItem) {
         const t = it.t.trim();
+        /* S2：英雄卡的「卡牌效果」单独成段，并回上一张英雄卡，不单独成卡 */
+        if (/^(?:新增：)?卡牌效果$/.test(t)) {
+          const body = String(it.d || '').trim();
+          const line = '卡牌效果' + (body ? '：\n' + body : '');
+          lastHeroItem.d = lastHeroItem.d
+            ? String(lastHeroItem.d).replace(/\s+$/, '') + '\n' + line
+            : line;
+          addSrc(lastHeroItem, it.src || line);
+          return;
+        }
         /* 「10级 / 攻击力 / 基础技能」这类档位补进上一条英雄的说明，不当标题 */
         if (t.length <= 20 && !/[。！？；，、：:]/.test(t)
           && (TIER_LABEL_RE.test(t) || ATTR_ADJ_LABEL_RE.test(t))) {
-          const line = t + (it.d ? '：' + it.d : '');
+          /* 按原文来：原文把标签和内容写在同一行才直接接，否则标签独占一行 */
+          const body = String(it.d || '');
+          const escT = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const inlineLab = new RegExp('(^|\\n)' + escT + '[：:][^\\n]').test(String(it.src || ''));
+          const line = t + (body ? '：' + (inlineLab ? '' : '\n') + body : '');
           lastHeroItem.d = lastHeroItem.d ? lastHeroItem.d + '\n' + line : line;
           addSrc(lastHeroItem, it.src || line);
           return;
+        }
+      }
+      /* 英雄卡的「觉醒前/觉醒后」没有单独标签时，也并回上一张英雄卡；
+         中间只剩一个「卡牌效果调整」小节时，把小节一起并回英雄 */
+      if (!it.t && it.d && /^觉醒[前后][：:]/.test(String(it.d).trim())) {
+        const prev = grp.items[grp.items.length - 1];
+        let label = '';
+        if (prev && prev.sub && prev !== lastHeroItem && grp.items[grp.items.length - 2] === lastHeroItem) {
+          label = prev.t;
+          grp.items.pop();
+        }
+        if (lastHeroItem && grp.items[grp.items.length - 1] === lastHeroItem) {
+          const add = (label ? label + '\n' : '') + String(it.d).trim();
+          lastHeroItem.d = (lastHeroItem.d ? String(lastHeroItem.d).replace(/\s+$/, '') + '\n' : '') + add;
+          addSrc(lastHeroItem, it.src || add);
+          return;
+        }
+      }
+      /* 同一小节再来一段只有档位标签、没有标题的调整块（女娲第二个
+         「技能调整 / 40级」）：并回最近一条已经写过这个标签的条目，
+         中间可能隔着「500层神力效果」这种已经挂在这名英雄下的小节 */
+      if (!it.t && it.d) {
+        const lab = String(it.d).trim().split('\n')[0].trim();
+        if (lab && lab.length <= 12 && !/[。！？；，、：:]/.test(lab)) {
+          for (let k = grp.items.length - 1; k >= 0; k--) {
+            const own = grp.items[k];
+            if (own.sub || !own.t || !String(own.d || '').includes(lab)) continue;
+            own.d = String(own.d).replace(/\s+$/, '') + '\n' + String(it.d).trim();
+            addSrc(own, it.src || String(it.d).trim());
+            own._cont = false;
+            return;
+          }
         }
       }
       /* 英雄条目后面单独成段的档位 / 属性行并回这名英雄，不另起空标题卡：
@@ -228,7 +282,7 @@ function parseNotice(html) {
     const buf = flatBuf;
     flatBuf = [];
     if (!grp) return;
-    pushItems(makeItems(buf, grp.name, chessScope(), true, markNew, guessNames, secRaw, grpState));
+    pushItems(makeItems(buf, grp.name, chessScope(), true, markNew, guessNames, secRaw, grpState, grpState));
   };
 
   /* 正文偶尔整体包在 <div>/<section> 里：遇到容器继续向内遍历，
@@ -286,13 +340,27 @@ function parseNotice(html) {
       lines = lines.slice(1);
       if (!lines.length) return;
     }
-    if (head && head.bold && head.bold === head.text && head.text.length <= 14
+    /* 分类标题偶尔漏加粗（11.13 的「效果牌调整」）：整行就是一个分类名、
+       后面还跟着内容时，同样按分组处理，否则这两条会被上一位英雄吞掉 */
+    const CATEGORY_HEAD_RE = /^(棋手|英雄|天赋|卡牌效果|装备|效果牌|羁绊|技能|战斗|数值|机制|商店|经济|系统|功能|对局|玩法|活动|问题|平衡)(调整|更新|修复|优化)$/;
+    /* 板块名本身不带调整/更新动词（「基础系统」「大厅布局」「战斗表现」）：
+       整行就是模块标题、后面还跟着内容，同样按分组处理，否则会被上一组吞掉 */
+    const MODULE_HEAD_RE = /(系统|功能|界面|布局|表现|体验|玩法)$/;
+    const isCatName = t => CATEGORY_HEAD_RE.test(t) || MODULE_HEAD_RE.test(t);
+    const plainCatHead = !!head && !head.bold && lines.length >= 2
+      && isCatName(head.text.trim())
+      && !(grp && clean(grp.name) === head.text.trim())
+      /* 角色组里的「技能调整 / 卡牌效果调整」是这名角色的下级小节，不是新分组 */
+      && !(grp && /(棋手|英雄)调整/.test(grp.name || '')
+        && /^(技能|卡牌效果|基础技能|被动技能|主动技能|技能效果)(调整|强化|效果调整)$/.test(head.text.trim()));
+    const boldHead = !!head && head.bold && head.bold === head.text && head.text.length <= 14
       && !/[。！？；：，、]$/.test(head.text)
       /* 整篇还没有章节（没有 h1）时，首行加粗短名就是分类标题：
          「活动优化」「王牌对决」「新手体验」这类不以调整/更新/修复收尾的
          也要开分组，否则这一段会被整段丢掉（18885635 / 18873181） */
-      && (END_SCOPE_RE.test(head.text) || optHead || !sec)
-      && !(grp && clean(grp.name) === head.text)) {
+      && (END_SCOPE_RE.test(head.text) || MODULE_HEAD_RE.test(head.text) || optHead || !sec)
+      && !(grp && clean(grp.name) === head.text);
+    if (boldHead || plainCatHead) {
       flushFlat(); flushAdj();
       /* 「天赋调整：春风化雨」：冒号前半截正好是当前分组名，说明它只是这个
          分组下的三级标签，不能新开一个同名分组（18891351） */
@@ -301,7 +369,7 @@ function parseNotice(html) {
         grp.items.push({ t: mColon[2].trim(), d: '', sub: true });
         lines = lines.slice(1);
         if (!lines.length) return;
-      } else if (grp && (!grp.items.length || grp.items.some(it => it.sub))) {
+      } else if (!plainCatHead && grp && (!grp.items.length || grp.items.some(it => it.sub))) {
         /* 刚开的分组还没有条目、或已经有三级标签：接着来的加粗小标题
            其实是这个分组的下级，不能再开一个同级分组
            （18916493「英雄调整 → 英雄技能调整 / 卡牌效果调整」） */
@@ -336,7 +404,7 @@ function parseNotice(html) {
        先把标题落成条目，后半段与下一段的「调整后」配对，避免拆成两张卡 */
     const markIdx = secRaw === 'plain' ? -1 : lines.findIndex((l, k) => k > 0 && /^调整[前后][：:]?$/.test(l.text));
     if (markIdx > 0) {
-      pushItems(makeItems(lines.slice(0, markIdx), grp.name, chessScope(), false, markNew, guessNames, secRaw));
+      pushItems(makeItems(lines.slice(0, markIdx), grp.name, chessScope(), false, markNew, guessNames, secRaw, undefined, grpState));
       adjLines = lines.slice(markIdx).map(l => l.text);
       adjSrc = lines.slice(markIdx).map(l => l.raw || l.text);
       adjOwner = true;
@@ -363,7 +431,7 @@ function parseNotice(html) {
       }
     }
 
-    pushItems(makeItems(lines, grp.name, chessScope(), false, markNew, guessNames, secRaw));
+    pushItems(makeItems(lines, grp.name, chessScope(), false, markNew, guessNames, secRaw, undefined, grpState));
     })();
     if (pPics.length) attachPics(pPics);
   });
